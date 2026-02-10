@@ -667,25 +667,6 @@ const TeacherDashboard = () => {
         alert('Session marked as Refunded. Reminder: Please process the actual refund in your Stripe Dashboard.');
     };
 
-    const addDemoPaidSession = () => {
-        const demoSession = {
-            id: 'demo-' + Date.now(),
-            date: new Date().toISOString().split('T')[0],
-            time: '14:00',
-            studentName: 'Demo Student',
-            studentEmail: 'demo@example.com',
-            cost: 30,
-            topic: 'Maths Revision',
-            type: 'lesson',
-            paymentStatus: 'Paid'
-        };
-        const updatedHistory = [...sessionHistory, demoSession];
-        setSessionHistory(updatedHistory);
-        localStorage.setItem('tutor_session_history', JSON.stringify(updatedHistory));
-        window.dispatchEvent(new Event('storage'));
-        alert('Demo paid session added! Check the "Recent Sessions" table below.');
-    };
-
     // Calendar Helpers
     const getDaysInMonth = (date) => {
         const year = date.getFullYear();
@@ -1104,13 +1085,6 @@ const TeacherDashboard = () => {
                             <h2 className="text-3xl font-bold text-gray-900 mb-2">Earnings Dashboard</h2>
                             <p className="text-gray-500">Track your tutoring income</p>
 
-                            {/* Testing Mode Button */}
-                            <button
-                                onClick={addDemoPaidSession}
-                                className="mt-4 px-4 py-2 bg-yellow-100 text-yellow-700 rounded-lg text-xs font-bold hover:bg-yellow-200 transition-colors border border-yellow-200"
-                            >
-                                🧪 Testing Mode: Add Demo Paid Session
-                            </button>
                         </div>
 
                         {/* Main Earnings Cards */}

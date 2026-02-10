@@ -2,47 +2,69 @@
  * Email Service Utility
  * 
  * Uses EmailJS for client-side notifications (confirmations)
- * and prepares logic for Resend (used in Supabase Edge Functions for reminders).
  */
 
 import emailjs from '@emailjs/browser';
 
-// These would ideally come from environment variables
-const EMAILJS_SERVICE_ID = 'service_xxxx'; // Placeholder
-const EMAILJS_TEMPLATE_ID = 'contact_form'; // Default EmailJS template name often used
-const EMAILJS_PUBLIC_KEY = 'public_xxxx'; // Placeholder
+// EmailJS Configuration
+const EMAILJS_SERVICE_ID = 'service_ryo31ep';
+const EMAILJS_TEMPLATE_ID = 'template_73af12q'; // "Student Master Template" (Formerly Confirmation)
+const EMAILJS_TEACHER_TEMPLATE_ID = 'template_mfg5t3p'; // Teacher Notification Template
+const EMAILJS_PUBLIC_KEY = 'ZyVRcQAs8z8yf9kTp';
 const TEACHER_EMAIL = 'davina.potter@outlook.com';
 
 export const emailService = {
     /**
+     * Internal helper to send the "Student Master Template"
+     */
+    async _sendStudentEmail(toName, toEmail, emailTitle, emailBody) {
+        if (!EMAILJS_PUBLIC_KEY) return;
+
+        return emailjs.send(
+            EMAILJS_SERVICE_ID,
+            EMAILJS_TEMPLATE_ID,
+            {
+                to_name: toName,
+                to_email: toEmail,
+                email_title: emailTitle,   // The Subject Line
+                email_body: emailBody      // The Main Message Content
+            },
+            EMAILJS_PUBLIC_KEY
+        );
+    },
+
+    /**
      * Send a booking confirmation email to the student
-     * @param {Object} bookingData - The booking details
      */
     async sendConfirmation(bookingData) {
         try {
-            if (!EMAILJS_PUBLIC_KEY || EMAILJS_PUBLIC_KEY === 'public_xxxx') {
-                console.warn('EmailJS not configured. Skipping confirmation email.');
-                return;
-            }
+            // 1. Send Student Confirmation (Dynamic Body)
+            const subjectLine = `Booking Confirmed: ${bookingData.subject} with Davina`;
+            const messageBody = `Hi ${bookingData.student},
 
-            const templateParams = {
-                to_name: bookingData.student,
-                to_email: bookingData.email,
-                subject: bookingData.subject,
-                date: bookingData.date,
-                time: bookingData.time,
-                meeting_link: bookingData.meetingLink,
-            };
+Your consultation is confirmed! I'm looking forward to speaking with you.
 
-            const response = await emailjs.send(
-                EMAILJS_SERVICE_ID,
-                EMAILJS_TEMPLATE_ID,
-                templateParams,
-                EMAILJS_PUBLIC_KEY
-            );
+📅 Date: ${bookingData.date}
+⏰ Time: ${bookingData.time}
+🔗 Meeting Link: ${bookingData.meetingLink}
 
-            console.log('Confirmation email sent successfully:', response.status, response.text);
-            return response;
+How to prepare:
+To help us make the most of our chat, it would be great if you could share:
+- Your Exam Board (e.g., AQA, Edexcel)
+- Current working grade & Desired grade
+- Any specific topics you find difficult
+
+(Don't worry if you don't know these yet!)
+
+See you soon,
+Davina Potter`;
+
+            await this._sendStudentEmail(bookingData.student, bookingData.email, subjectLine, messageBody);
+            console.log('Confirmation email sent');
+
+            // 2. Send Teacher Notification (Keep existing separate template for safety/Thread-Reply)
+            await this.sendTeacherNotification(bookingData);
+
         } catch (error) {
             console.error('Failed to send confirmation email:', error);
             throw error;
@@ -50,29 +72,50 @@ export const emailService = {
     },
 
     /**
-   * Send a reschedule request notification to the teacher or student
-   */
+     * Send a notification email to the teacher
+     */
+    async sendTeacherNotification(bookingData) {
+        try {
+            if (!EMAILJS_PUBLIC_KEY) return;
+            // Uses the separate Teacher Template (template_mfg5t3p)
+            await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEACHER_TEMPLATE_ID, {
+                student_name: bookingData.student,
+                student_email: bookingData.email,
+                subject: bookingData.subject,
+                date: bookingData.date,
+                time: bookingData.time,
+                booking_type: bookingData.bookingFor === 'parent' ? 'Parent' : 'Student',
+                to_email: TEACHER_EMAIL
+            }, EMAILJS_PUBLIC_KEY);
+        } catch (error) {
+            console.error('Failed to send teacher notification:', error);
+        }
+    },
+
+    /**
+     * Send a reschedule request
+     */
     async sendRescheduleRequest(bookingData, fromType) {
         try {
-            if (!EMAILJS_PUBLIC_KEY || EMAILJS_PUBLIC_KEY === 'public_xxxx') {
-                console.warn('EmailJS not configured. Skipping reschedule request email.');
-                return;
+            // Only handle sending TO STUDENT here (Teacher gets notified via dashboard/UI usually, or we could add teacher logic)
+            if (fromType === 'teacher') {
+                const subjectLine = `Reschedule Request: ${bookingData.subject}`;
+                const messageBody = `Hi ${bookingData.student},
+
+I would like to request to reschedule our lesson originally set for ${bookingData.date} at ${bookingData.time}.
+
+Requested New Time:
+📅 Date: ${bookingData.requestedDate}
+⏰ Time: ${bookingData.requestedTime}
+
+Please login to your dashboard to Approve or Deny this request.
+
+Best,
+Davina Potter`;
+                return await this._sendStudentEmail(bookingData.student, bookingData.email, subjectLine, messageBody);
             }
-
-            const templateParams = {
-                to_name: fromType === 'student' ? 'Teacher' : bookingData.student,
-                to_email: fromType === 'student' ? TEACHER_EMAIL : bookingData.email,
-                from_name: fromType === 'student' ? bookingData.student : 'Davina Potter',
-                original_date: bookingData.date,
-                original_time: bookingData.time,
-                requested_date: bookingData.requestedDate,
-                requested_time: bookingData.requestedTime,
-                subject: bookingData.subject
-            };
-
-            return await emailjs.send(EMAILJS_SERVICE_ID, 'reschedule_request_template', templateParams, EMAILJS_PUBLIC_KEY);
         } catch (error) {
-            console.error('Failed to send reschedule request email:', error);
+            console.error('Failed to send reschedule request:', error);
         }
     },
 
@@ -81,20 +124,20 @@ export const emailService = {
      */
     async sendRescheduleResponse(bookingData, response) {
         try {
-            if (!EMAILJS_PUBLIC_KEY || EMAILJS_PUBLIC_KEY === 'public_xxxx') return;
+            const subjectLine = `Reschedule ${response}: ${bookingData.subject}`;
+            const messageBody = `Hi ${bookingData.student},
 
-            const templateParams = {
-                to_name: bookingData.student,
-                to_email: bookingData.email,
-                response: response, // 'Approved' or 'Denied'
-                date: bookingData.date,
-                time: bookingData.time,
-                subject: bookingData.subject
-            };
+Your reschedule request has been ${response}.
 
-            return await emailjs.send(EMAILJS_SERVICE_ID, 'reschedule_response_template', templateParams, EMAILJS_PUBLIC_KEY);
+New Lesson Time:
+📅 Date: ${bookingData.date}
+⏰ Time: ${bookingData.time}
+
+Best,
+Davina`;
+            return await this._sendStudentEmail(bookingData.student, bookingData.email, subjectLine, messageBody);
         } catch (error) {
-            console.error('Failed to send reschedule response email:', error);
+            console.error('Failed to send reschedule response:', error);
         }
     },
 
@@ -103,50 +146,42 @@ export const emailService = {
      */
     async sendCancellationNotice(bookingData, cancelledBy) {
         try {
-            if (!EMAILJS_PUBLIC_KEY || EMAILJS_PUBLIC_KEY === 'public_xxxx') return;
+            if (cancelledBy === 'teacher') {
+                const subjectLine = `Lesson Cancelled: ${bookingData.subject}`;
+                const messageBody = `Hi ${bookingData.student},
 
-            const templateParams = {
-                to_name: cancelledBy === 'teacher' ? bookingData.student : 'Teacher',
-                to_email: cancelledBy === 'teacher' ? bookingData.email : TEACHER_EMAIL,
-                cancelled_by: cancelledBy === 'teacher' ? 'Davina Potter' : bookingData.student,
-                date: bookingData.date,
-                time: bookingData.time,
-                subject: bookingData.subject
-            };
+The lesson scheduled for ${bookingData.date} at ${bookingData.time} has been cancelled.
 
-            return await emailjs.send(EMAILJS_SERVICE_ID, 'cancellation_template', templateParams, EMAILJS_PUBLIC_KEY);
+Topic: ${bookingData.subject}
+
+If this was a paid lesson, any applicable refunds will be processed shortly.`;
+
+                return await this._sendStudentEmail(bookingData.student, bookingData.email, subjectLine, messageBody);
+            }
         } catch (error) {
             console.error('Failed to send cancellation email:', error);
         }
     },
 
     /**
-   * Send a refund notice
-   */
+     * Send a refund notice
+     */
     async sendRefundNotice(bookingData) {
         try {
-            if (!EMAILJS_PUBLIC_KEY || EMAILJS_PUBLIC_KEY === 'public_xxxx') return;
+            const subjectLine = `Refund Processed: ${bookingData.subject}`;
+            const messageBody = `Hi ${bookingData.student},
 
-            const templateParams = {
-                to_name: bookingData.student,
-                to_email: bookingData.email,
-                date: bookingData.date,
-                time: bookingData.time,
-                amount: bookingData.cost,
-                subject: bookingData.subject
-            };
+A refund of £${bookingData.cost} has been initiated for your lesson on ${bookingData.date}.
 
-            return await emailjs.send(EMAILJS_SERVICE_ID, 'refund_template', templateParams, EMAILJS_PUBLIC_KEY);
+Please allow 5-10 business days for this to appear in your account.`;
+
+            return await this._sendStudentEmail(bookingData.student, bookingData.email, subjectLine, messageBody);
         } catch (error) {
             console.error('Failed to send refund email:', error);
         }
     },
 
-    /**
-     * Placeholder for sending reminders (usually handled by Supabase Edge Functions)
-       * This logic is documentary for the Edge Function implementation.
-       */
     async sendReminder(bookingData) {
-        console.log('Reminder logic would trigger here (recommended via Supabase Edge Functions)');
+        console.log('Reminder logic would trigger here');
     }
 };

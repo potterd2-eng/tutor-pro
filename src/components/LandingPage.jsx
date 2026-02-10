@@ -218,7 +218,7 @@ const LandingPage = () => {
                 <div className="max-w-6xl mx-auto px-6 grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
                     {[
                         { icon: Star, label: "5-Star Reviews", val: "50+" },
-                        { icon: BookOpen, label: "Subjects", val: "Maths & Sociology (KS3 - A-Level)" },
+                        { icon: BookOpen, label: "Subjects", val: "Maths (KS3/GCSE) & Sociology (A-Level)" },
                         { icon: Clock, label: "Tutoring Hours", val: "550+" },
                         { icon: Shield, label: "DBS Checked", val: "Verified" },
                     ].map((s, i) => (
@@ -933,7 +933,10 @@ const BookingGrid = () => {
         setShowBookingModal(false);
 
         // Send Confirmation Email (Async)
-        emailService.sendConfirmation(newBooking).catch(err => {
+        emailService.sendConfirmation({
+            ...newBooking,
+            link: meetingLink
+        }).catch(err => {
             console.error('Email confirmation error:', err);
         });
 
@@ -1020,8 +1023,8 @@ const BookingGrid = () => {
 
             {/* Booking Modal */}
             {showBookingModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setShowBookingModal(false)}>
-                    <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowBookingModal(false)}>
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-2xl max-w-md w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         <h2 className="text-2xl font-bold text-gray-800 mb-2">Confirm Consultation</h2>
                         <p className="text-gray-500 mb-6">Free 15-minute chat on {selectedSlot && new Date(selectedSlot.date).toLocaleDateString()} at {selectedSlot && selectedSlot.time}</p>
 
@@ -1121,14 +1124,7 @@ const BookingGrid = () => {
                         </div>
 
                         <div className="space-y-3">
-                            <a
-                                href={confirmationData.link}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="block w-full bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-xl font-bold transition-all shadow-md flex items-center justify-center gap-2"
-                            >
-                                <Video size={18} /> Join Meeting Now (Test)
-                            </a>
+                            {/* Link removed as per user request to not show join button early */}
                             <button
                                 onClick={() => setConfirmationData(null)}
                                 className="block w-full bg-gray-100 hover:bg-gray-200 text-gray-600 px-6 py-3 rounded-xl font-bold transition-all"
