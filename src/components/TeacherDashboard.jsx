@@ -178,35 +178,52 @@ const TeacherDashboard = () => {
     const outstandingEarnings = completedUnpaid;
     const totalPending = completedUnpaid + futureEarnings;
 
-    // Monthly Projections (Rotating 3-Month View)
+    // Monthly Projections (Actual + Projected)
     const monthlyProjections = [0, 1, 2].map(offset => {
         const d = new Date(currentYear, currentMonth + offset, 1);
-        const month = d.getMonth();
-        const year = d.getFullYear();
+        const targetMonth = d.getMonth();
+        const targetYear = d.getFullYear();
         const monthName = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
-        const monthBookings = bookings.filter(b => {
-            const bDate = new Date(b.date);
-            return bDate.getMonth() === month && bDate.getFullYear() === year && b.status !== 'cancelled';
+        // Combined source for earnings calculation
+        const allItems = [...bookings, ...sessionHistory];
+
+        // 1. Calculate Earnings (Revenue Recognized)
+        const revenueItems = allItems.filter(item => {
+            if (item.status === 'cancelled') return false;
+
+            // If Paid, use Payment Date
+            if (item.paymentStatus === 'Paid') {
+                const pDate = item.paymentDate ? new Date(item.paymentDate) : new Date(item.date); // Fallback to lesson date if no payment date
+                return pDate.getMonth() === targetMonth && pDate.getFullYear() === targetYear;
+            }
+
+            // If Unpaid/Due, use Lesson Date (Projected)
+            const lDate = new Date(item.date);
+            return lDate.getMonth() === targetMonth && lDate.getFullYear() === targetYear && item.type !== 'consultation';
         });
 
-        const paidBookings = monthBookings.filter(b => b.type !== 'consultation' && b.subject !== 'Free Consultation');
-        const projected = paidBookings.reduce((sum, b) => sum + (Number(b.cost) || 30), 0);
-        const consultations = monthBookings.filter(b => (Number(b.cost) || 0) === 0 || b.type === 'consultation' || b.subject === 'Free Consultation');
+        const projectedEarnings = revenueItems.reduce((sum, item) => sum + (Number(item.cost) || 0), 0);
+
+        // 2. Count Lessons & Consultations (Activity based on Lesson Date)
+        const monthActivity = bookings.filter(b => {
+            const bDate = new Date(b.date);
+            return bDate.getMonth() === targetMonth && bDate.getFullYear() === targetYear && b.status !== 'cancelled';
+        });
+
+        const bookedLessons = monthActivity.filter(b => b.type !== 'consultation' && b.subject !== 'Free Consultation').length;
+        const consultations = monthActivity.filter(b => b.type === 'consultation' || b.subject === 'Free Consultation').length;
 
         return {
             monthName,
-            bookedLessons: paidBookings.length,
-            consultations: consultations.length,
-            projectedEarnings: projected
+            bookedLessons,
+            consultations,
+            projectedEarnings
         };
     });
 
     const projectedThisMonth = monthlyProjections[0].projectedEarnings;
-    const paidBookingsThisMonth = bookings.filter(b => {
-        const date = new Date(b.date);
-        return date.getMonth() === currentMonth && date.getFullYear() === currentYear && b.type !== 'consultation' && b.subject !== 'Free Consultation';
-    });
+    const paidBookingsThisMonth = []; // Deprecated/Unused in new logic, keeping var structure if verified unused elsewhere
 
     // Save Unified Schedule
     useEffect(() => {
@@ -1109,7 +1126,7 @@ const TeacherDashboard = () => {
                             <div className="bg-gradient-to-br from-purple-500 to-purple-600 p-6 rounded-2xl shadow-lg text-white">
                                 <div className="text-sm font-bold uppercase tracking-wide opacity-90 mb-2">Projected This Month</div>
                                 <div className="text-4xl font-bold mb-1">£{projectedThisMonth}</div>
-                                <div className="text-xs opacity-80">{paidBookingsThisMonth.filter(b => (b.cost || 30) > 0).length} lessons booked</div>
+                                <div className="text-xs opacity-80">{monthlyProjections[0].bookedLessons} lessons booked</div>
                             </div>
 
                             {/* Outstanding Balance */}
@@ -1439,6 +1456,37 @@ const TeacherDashboard = () => {
                                                             >
                                                                 Delete
                                                             </button>
+                                                            {booking.recurringId && (
+                                                                <button
+                                                                    onClick={() => {
+                                                                        if (window.confirm(`Delete ALL future lessons in this series for ${booking.student}?`)) {
+                                                                            // 1. Find all future bookings with same recurringId
+                                                                            const now = new Date();
+                                                                            const seriesToDelete = bookings.filter(b =>
+                                                                                b.recurringId === booking.recurringId &&
+                                                                                new Date(b.date + 'T' + b.time) >= now
+                                                                            );
+
+                                                                            // 2. Remove them
+                                                                            const updated = bookings.filter(b => !seriesToDelete.find(s => s.id === b.id));
+                                                                            setBookings(updated);
+                                                                            localStorage.setItem('tutor_bookings', JSON.stringify(updated));
+                                                                            window.dispatchEvent(new Event('storage'));
+
+                                                                            // 3. Notify Student (Send one email for the batch)
+                                                                            emailService.sendCancellationNotice({
+                                                                                ...booking,
+                                                                                subject: `${booking.subject} (Entire Series Cancelled)`
+                                                                            }, 'teacher');
+
+                                                                            setSelectedDate(null);
+                                                                        }
+                                                                    }}
+                                                                    className="bg-red-600 text-white border border-red-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 transition-all shadow-sm"
+                                                                >
+                                                                    Delete Series
+                                                                </button>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 ))

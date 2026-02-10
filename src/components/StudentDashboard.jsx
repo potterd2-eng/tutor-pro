@@ -42,6 +42,7 @@ const StudentDashboard = () => {
     const [reviewRating, setReviewRating] = useState(0);
     const [reviewComment, setReviewComment] = useState('');
     const [confirmation, setConfirmation] = useState(null);
+    const [cancelTarget, setCancelTarget] = useState(null);
 
     // Payment Processing State
     const [isProcessingPayment, setIsProcessingPayment] = useState(false);
@@ -280,21 +281,22 @@ const StudentDashboard = () => {
             .sort((a, b) => new Date(a.date + 'T' + (a.time || '00:00')) - new Date(b.date + 'T' + (b.time || '00:00')));
 
         // Take first 10 (including current)
-        const toMark = allInvoices.slice(0, 10).map(inv => inv.id);
+        const toMarkIds = allInvoices.slice(0, 10).map(inv => inv.id);
+        const paymentDate = new Date().toISOString();
 
         // Update history
         const updatedHistory = allHistory.map(h =>
-            toMark.includes(h.id) ? { ...h, paymentStatus: 'Paid' } : h
+            toMarkIds.includes(h.id) ? { ...h, paymentStatus: 'Paid', paymentDate } : h
         );
         localStorage.setItem('tutor_session_history', JSON.stringify(updatedHistory));
-        setHistory(prev => prev.map(h => toMark.includes(h.id) ? { ...h, paymentStatus: 'Paid' } : h));
+        setHistory(prev => prev.map(h => toMarkIds.includes(h.id) ? { ...h, paymentStatus: 'Paid', paymentDate } : h));
 
         // Update bookings
         const updatedBookings = allBookings.map(b =>
-            toMark.includes(b.id) ? { ...b, paymentStatus: 'Paid' } : b
+            toMarkIds.includes(b.id) ? { ...b, paymentStatus: 'Paid', paymentDate } : b
         );
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
-        setBookings(prev => prev.map(b => toMark.includes(b.id) ? { ...b, paymentStatus: 'Paid' } : b));
+        setBookings(prev => prev.map(b => toMarkIds.includes(b.id) ? { ...b, paymentStatus: 'Paid', paymentDate } : b));
 
         window.dispatchEvent(new Event('storage'));
     };
@@ -318,17 +320,20 @@ const StudentDashboard = () => {
     };
 
     const markAsPaid = (invoiceId) => {
+        const paymentDate = new Date().toISOString();
+
         // Update HISTORY
         const allHistory = JSON.parse(localStorage.getItem('tutor_session_history') || '[]');
         const target = allHistory.find(h => h.id === invoiceId);
 
-        // Update target and potentially other recurring ones
+        // Update target and potentially other recurring ones if logic dictated (but for single pay we usually keep strict)
+        // However, if we pay for a "recurringId" linked item that implies block, usually we use markBlockAsPaid. 
+        // Here we stick to single or specific target.
+
         const updatedHistory = allHistory.map(h => {
-            if (h.id === invoiceId) return { ...h, paymentStatus: 'Paid' };
-            // If the paid one was a bulk payment (£280) or part of a recurring series
-            if (target && target.recurringId && h.recurringId === target.recurringId) {
-                return { ...h, paymentStatus: 'Paid' };
-            }
+            if (h.id === invoiceId) return { ...h, paymentStatus: 'Paid', paymentDate };
+            // If the paid one was a bulk payment (£280) or part of a recurring series we might want to be careful.
+            // But usually this function is for single items.
             return h;
         });
 
@@ -338,10 +343,7 @@ const StudentDashboard = () => {
         // Update BOOKINGS
         const allBookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
         const updatedBookings = allBookings.map(b => {
-            if (b.id === invoiceId) return { ...b, paymentStatus: 'Paid' };
-            if (target && target.recurringId && b.recurringId === target.recurringId) {
-                return { ...b, paymentStatus: 'Paid' };
-            }
+            if (b.id === invoiceId) return { ...b, paymentStatus: 'Paid', paymentDate };
             return b;
         });
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
@@ -662,22 +664,52 @@ const StudentDashboard = () => {
     };
 
     const cancelBooking = (booking) => {
-        if (!window.confirm("Are you sure you want to cancel this lesson?")) return;
+        setCancelTarget(booking);
+    };
 
+    const handleConfirmCancellation = (cancelSeries = false) => {
+        if (!cancelTarget) return;
+        const booking = cancelTarget;
         const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
-        const updatedBookings = allBookings.map(b => b.id === booking.id ? { ...b, status: 'cancelled' } : b);
-
-        // Free the slot
         const allSlots = JSON.parse(localStorage.getItem('tutor_lesson_slots')) || [];
-        const updatedSlots = allSlots.map(s => (s.date === booking.date && s.time === booking.time) ? { ...s, bookedBy: null } : s);
+
+        let updatedBookings;
+        let updatedSlots;
+
+        if (cancelSeries && booking.recurringId) {
+            const now = new Date();
+            const seriesToDelete = allBookings.filter(b =>
+                b.recurringId === booking.recurringId &&
+                new Date(b.date + 'T' + b.time) >= now
+            );
+
+            updatedBookings = allBookings.map(b => seriesToDelete.find(s => s.id === b.id) ? { ...b, status: 'cancelled' } : b);
+
+            // Free slots
+            updatedSlots = allSlots.map(s => {
+                const isBookedInSeries = seriesToDelete.find(b => b.date === s.date && b.time === s.time);
+                return isBookedInSeries ? { ...s, bookedBy: null } : s;
+            });
+
+            // Notify Teacher (Series)
+            emailService.sendCancellationNotice({
+                ...booking,
+                subject: `${booking.subject} (Entire Series Cancelled)`
+            }, 'student');
+
+        } else {
+            updatedBookings = allBookings.map(b => b.id === booking.id ? { ...b, status: 'cancelled' } : b);
+            updatedSlots = allSlots.map(s => (s.date === booking.date && s.time === booking.time) ? { ...s, bookedBy: null } : s);
+
+            // Notify Teacher (Single)
+            emailService.sendCancellationNotice(booking, 'student');
+        }
 
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
         localStorage.setItem('tutor_lesson_slots', JSON.stringify(updatedSlots));
         window.dispatchEvent(new Event('storage'));
-        setNotification({ type: 'success', message: 'Lesson Cancelled.' });
-
-        // Notify Teacher
-        emailService.sendCancellationNotice(booking, 'student');
+        setNotification({ type: 'success', message: cancelSeries ? 'Series Cancelled.' : 'Lesson Cancelled.' });
+        setCancelTarget(null);
     };
 
     // Calculate Stats
@@ -1200,17 +1232,64 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-gray-100">
-                                                {[...bookings, ...history]
-                                                    .sort((a, b) => new Date(b.date + 'T' + (b.time || '00:00')) - new Date(a.date + 'T' + (a.time || '00:00')))
-                                                    .map((invoice) => (
+                                                {(() => {
+                                                    const allMetrics = [...bookings, ...history].sort((a, b) => new Date(b.date + 'T' + (b.time || '00:00')) - new Date(a.date + 'T' + (a.time || '00:00')));
+                                                    const processedSeries = new Set();
+                                                    const rows = [];
+
+                                                    allMetrics.forEach(item => {
+                                                        const isSeries = item.recurringId || (item.id && typeof item.id === 'string' && item.id.includes('wk'));
+
+                                                        let seriesId = null;
+                                                        if (isSeries) {
+                                                            if (item.recurringId) seriesId = item.recurringId;
+                                                            else if (typeof item.id === 'string' && item.id.includes(' - wk')) seriesId = item.id.split(' - wk')[0];
+                                                            else if (typeof item.id === 'string' && item.id.includes('- wk')) seriesId = item.id.split('- wk')[0];
+                                                        }
+
+                                                        if (seriesId) {
+                                                            if (processedSeries.has(seriesId)) return;
+
+                                                            const seriesItems = allMetrics.filter(i =>
+                                                                i.recurringId === seriesId ||
+                                                                (i.id && typeof i.id === 'string' && (i.id.startsWith(seriesId + ' - wk') || i.id.startsWith(seriesId + '- wk')))
+                                                            );
+
+                                                            if (seriesItems.length > 1) {
+                                                                processedSeries.add(seriesId);
+                                                                seriesItems.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+                                                                const isPaid = seriesItems.every(i => i.paymentStatus === 'Paid');
+
+                                                                rows.push({
+                                                                    id: seriesId,
+                                                                    date: seriesItems[0].date,
+                                                                    time: seriesItems[0].time,
+                                                                    subject: "10-Week Tuition Block",
+                                                                    cost: 280,
+                                                                    paymentStatus: isPaid ? 'Paid' : 'Due',
+                                                                    isGroup: true,
+                                                                    seriesIds: seriesItems.map(i => i.id).filter(id => id), // Ensure valid IDs
+                                                                    itemCount: seriesItems.length
+                                                                });
+                                                            } else {
+                                                                rows.push(item);
+                                                            }
+                                                        } else {
+                                                            rows.push(item);
+                                                        }
+                                                    });
+
+                                                    return rows.map((invoice) => (
                                                         <tr key={invoice.id || Math.random()} className="hover:bg-gray-50 transition-colors">
                                                             <td className="p-4">
                                                                 <div className="font-bold text-gray-700">{new Date(invoice.date).toLocaleDateString()}</div>
-                                                                <div className="text-xs text-gray-400">{invoice.time}</div>
+                                                                {invoice.isGroup && <div className="text-xs text-purple-600 font-medium">Starts {invoice.time}</div>}
+                                                                {!invoice.isGroup && <div className="text-xs text-gray-400">{invoice.time}</div>}
                                                             </td>
                                                             <td className="p-4 text-gray-600 text-sm">
                                                                 {invoice.subject || invoice.topic || 'Tutoring Session'}
-                                                                {invoice.id && invoice.id.includes('wk') && <span className="ml-2 text-xs bg-purple-100 text-purple-600 px-1 rounded">10-Wk Block</span>}
+                                                                {invoice.isGroup && <span className="ml-2 text-xs bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full font-bold">10 Sessions</span>}
                                                             </td>
                                                             <td className="p-4 font-bold text-gray-900">£{invoice.cost || 30}</td>
                                                             <td className="p-4">
@@ -1219,7 +1298,11 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
                                                                 </span>
                                                             </td>
                                                             <td className="p-4">
-                                                                {invoice.feedback_well || invoice.lessonTopic ? (
+                                                                {invoice.isGroup ? (
+                                                                    <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-lg font-bold uppercase tracking-wider border border-gray-200">
+                                                                        Series
+                                                                    </span>
+                                                                ) : (invoice.feedback_well || invoice.lessonTopic ? (
                                                                     <span className="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-lg font-black uppercase tracking-wider border border-blue-200 shadow-sm">
                                                                         Completed
                                                                     </span>
@@ -1227,7 +1310,7 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
                                                                     <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-lg font-bold uppercase tracking-wider border border-gray-200">
                                                                         Scheduled
                                                                     </span>
-                                                                )}
+                                                                ))}
                                                             </td>
                                                             <td className="p-4 text-right">
                                                                 {invoice.paymentStatus !== 'Paid' ? (
@@ -1249,7 +1332,8 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
                                                                 )}
                                                             </td>
                                                         </tr>
-                                                    ))}
+                                                    ));
+                                                })()}
                                             </tbody>
                                         </table>
                                         {history.length === 0 && (
@@ -1639,6 +1723,54 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
                                 className="w-full py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all"
                             >
                                 Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Cancel Booking Modal */}
+            {cancelTarget && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
+                    <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                        <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
+                            <Trash2 size={24} />
+                        </div>
+                        <h3 className="text-xl font-bold text-gray-900 mb-2">Cancel Lesson</h3>
+                        <p className="text-gray-600 mb-6">
+                            Are you sure you want to cancel your lesson on <strong>{new Date(cancelTarget.date).toLocaleDateString()}</strong> at {cancelTarget.time}?
+                            {cancelTarget.recurringId && " This is part of a recurring series."}
+                        </p>
+
+                        <div className="flex flex-col gap-3">
+                            {cancelTarget.recurringId ? (
+                                <>
+                                    <button
+                                        onClick={() => handleConfirmCancellation(false)}
+                                        className="w-full py-3 bg-white border-2 border-red-500 text-red-600 rounded-xl font-bold hover:bg-red-50 transition-all"
+                                    >
+                                        Cancel Just This Lesson
+                                    </button>
+                                    <button
+                                        onClick={() => handleConfirmCancellation(true)}
+                                        className="w-full py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-md transition-all"
+                                    >
+                                        Cancel Entire Series
+                                    </button>
+                                </>
+                            ) : (
+                                <button
+                                    onClick={() => handleConfirmCancellation(false)}
+                                    className="w-full py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-md transition-all"
+                                >
+                                    Confirm Cancellation
+                                </button>
+                            )}
+                            <button
+                                onClick={() => setCancelTarget(null)}
+                                className="w-full py-3 text-gray-500 font-bold hover:bg-gray-50 rounded-xl transition-all"
+                            >
+                                Keep Lesson
                             </button>
                         </div>
                     </div>

@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
     Calendar, CheckCircle, ChevronDown, ChevronRight, Clock, Copy, CreditCard,
     Facebook, GraduationCap, Instagram, Linkedin, LogIn, Mail, Menu, MessageSquare,
-    Phone, Star, Twitter, User, Users, Video, X, BookOpen, Shield, ArrowRight
+    Phone, Star, Twitter, User, Users, Video, X, BookOpen, Shield, ArrowRight, Calculator, Brain
 } from 'lucide-react';
 import CryptoJS from 'crypto-js';
 import profilePic from '../assets/profile.jpg'; // Import profile picture
@@ -218,7 +218,6 @@ const LandingPage = () => {
                 <div className="max-w-6xl mx-auto px-6 grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
                     {[
                         { icon: Star, label: "5-Star Reviews", val: "50+" },
-                        { icon: BookOpen, label: "Subjects", val: "Maths (KS3/GCSE) & Sociology (A-Level)" },
                         { icon: Clock, label: "Tutoring Hours", val: "550+" },
                         { icon: Shield, label: "DBS Checked", val: "Verified" },
                     ].map((s, i) => (
@@ -232,6 +231,62 @@ const LandingPage = () => {
                     ))}
                 </div>
             </div>
+
+            {/* Specialized Subjects Section */}
+            <section className="py-20 bg-gray-50 border-b border-gray-100">
+                <div className="max-w-6xl mx-auto px-6">
+                    <div className="text-center mb-16">
+                        <h2 className="text-sm font-bold text-teal-500 uppercase tracking-widest mb-2">My Expertise</h2>
+                        <h3 className="text-4xl font-bold text-brand-navy">Specialized Tutoring Subjects</h3>
+                    </div>
+
+                    <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+                        {/* Maths Card */}
+                        <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-all group">
+                            <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600 mb-6 group-hover:scale-110 transition-transform">
+                                <Calculator size={32} />
+                            </div>
+                            <div className="flex justify-between items-start mb-4">
+                                <h3 className="text-2xl font-bold text-gray-900">Mathematics</h3>
+                                <div className="flex gap-2">
+                                    <span className="px-3 py-1 bg-blue-100 text-blue-700 text-xs font-bold rounded-full">KS3</span>
+                                    <span className="px-3 py-1 bg-blue-100 text-blue-700 text-xs font-bold rounded-full">GCSE</span>
+                                </div>
+                            </div>
+                            <p className="text-gray-600 leading-relaxed mb-6">
+                                Building confidence in numbers. From algebra to geometry, I help students understand the 'why' behind the methods, turning anxiety into achievement.
+                            </p>
+                            <ul className="space-y-3">
+                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-blue-500" /> Exam Board Specific Prep (AQA, Edexcel)</li>
+                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-blue-500" /> Problem Solving & Logic</li>
+                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-blue-500" /> Grade 9-1 Targeting Strategies</li>
+                            </ul>
+                        </div>
+
+                        {/* Sociology Card */}
+                        <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-all group">
+                            <div className="w-16 h-16 bg-purple-50 rounded-2xl flex items-center justify-center text-purple-600 mb-6 group-hover:scale-110 transition-transform">
+                                <Users size={32} />
+                            </div>
+                            <div className="flex justify-between items-start mb-4">
+                                <h3 className="text-2xl font-bold text-gray-900">Sociology</h3>
+                                <div className="flex gap-2">
+                                    <span className="px-3 py-1 bg-purple-100 text-purple-700 text-xs font-bold rounded-full">GCSE</span>
+                                    <span className="px-3 py-1 bg-purple-100 text-purple-700 text-xs font-bold rounded-full">A-Level</span>
+                                </div>
+                            </div>
+                            <p className="text-gray-600 leading-relaxed mb-6">
+                                Exploring society, culture, and identity. I specialize in making complex theories accessible and helping students master essay-writing techniques for top marks.
+                            </p>
+                            <ul className="space-y-3">
+                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-purple-500" /> Research Methods & Theory</li>
+                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-purple-500" /> Essay Structuring Workshops</li>
+                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-purple-500" /> Critical Thinking & Analysis</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
 
             {/* About Section */}
             <section id="about" className="py-20 px-6">
