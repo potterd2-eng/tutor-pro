@@ -218,7 +218,7 @@ const LandingPage = () => {
                 <div className="max-w-6xl mx-auto px-6 grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
                     {[
                         { icon: Star, label: "5-Star Reviews", val: "50+" },
-                        { icon: BookOpen, label: "Subjects", val: "Maths & Sociology" },
+                        { icon: BookOpen, label: "Subjects", val: "Maths & Sociology (KS3 - A-Level)" },
                         { icon: Clock, label: "Tutoring Hours", val: "550+" },
                         { icon: Shield, label: "DBS Checked", val: "Verified" },
                     ].map((s, i) => (
@@ -262,7 +262,7 @@ const LandingPage = () => {
                         <h2 className="text-sm font-bold text-teal-500 uppercase tracking-widest mb-2">About Your Tutor</h2>
                         <h3 className="text-4xl font-bold text-brand-navy mb-6">Expert Guidance, <br />Personalized for You.</h3>
                         <p className="text-lg text-gray-600 mb-6 leading-relaxed">
-                            Hi, I'm Davina! With over 3 years of experience and 550+ tutoring hours, I help students excel in **KS3 Maths, GCSE Maths, and A-Level Sociology**. I have a First-Class degree in Sociology and am currently pursuing a Master's in Banking and Finance at Surrey University.
+                            Hi, I'm Davina! With over 3 years of experience and 550+ tutoring hours, I help students excel in **Maths KS3, GCSE and Sociology GCSE, A level**. I have a First-Class degree in Sociology and am currently pursuing a Master's in Banking and Finance at Surrey University.
                         </p>
                         <p className="text-lg text-gray-600 mb-6 leading-relaxed">
                             Sociology has a special place in my heart, and I strive to convey this enthusiasm to my students. I also love tutoring Maths—it was a subject I improved on significantly through hard work, going from a Grade 5/C to a Grade 7/A.
@@ -274,7 +274,7 @@ const LandingPage = () => {
                             {[
                                 "First-Class Degree in Sociology",
                                 "MSc Banking & Finance Student (Surrey University)",
-                                "Specialist in KS3, GCSE & A-Level",
+                                "Specialist in KS3, GCSE & A-Level (Maths & Sociology)",
                                 "Full Enhanced DBS Checked (Issued 2026)"
                             ].map((item, i) => (
                                 <div key={i} className="flex items-center gap-3">

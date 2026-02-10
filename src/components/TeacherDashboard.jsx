@@ -178,13 +178,35 @@ const TeacherDashboard = () => {
     const outstandingEarnings = completedUnpaid;
     const totalPending = completedUnpaid + futureEarnings;
 
-    const thisMonthBookings = bookings.filter(b => {
-        const date = new Date(b.date);
-        return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    // Monthly Projections (Rotating 3-Month View)
+    const monthlyProjections = [0, 1, 2].map(offset => {
+        const d = new Date(currentYear, currentMonth + offset, 1);
+        const month = d.getMonth();
+        const year = d.getFullYear();
+        const monthName = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+        const monthBookings = bookings.filter(b => {
+            const bDate = new Date(b.date);
+            return bDate.getMonth() === month && bDate.getFullYear() === year && b.status !== 'cancelled';
+        });
+
+        const paidBookings = monthBookings.filter(b => b.type !== 'consultation' && b.subject !== 'Free Consultation');
+        const projected = paidBookings.reduce((sum, b) => sum + (Number(b.cost) || 30), 0);
+        const consultations = monthBookings.filter(b => (Number(b.cost) || 0) === 0 || b.type === 'consultation' || b.subject === 'Free Consultation');
+
+        return {
+            monthName,
+            bookedLessons: paidBookings.length,
+            consultations: consultations.length,
+            projectedEarnings: projected
+        };
     });
 
-    const paidBookingsThisMonth = thisMonthBookings.filter(b => b.type !== 'consultation' && b.subject !== 'Free Consultation');
-    const projectedThisMonth = paidBookingsThisMonth.reduce((sum, b) => sum + (Number(b.cost) || 30), 0);
+    const projectedThisMonth = monthlyProjections[0].projectedEarnings;
+    const paidBookingsThisMonth = bookings.filter(b => {
+        const date = new Date(b.date);
+        return date.getMonth() === currentMonth && date.getFullYear() === currentYear && b.type !== 'consultation' && b.subject !== 'Free Consultation';
+    });
 
     // Save Unified Schedule
     useEffect(() => {
@@ -645,6 +667,25 @@ const TeacherDashboard = () => {
         alert('Session marked as Refunded. Reminder: Please process the actual refund in your Stripe Dashboard.');
     };
 
+    const addDemoPaidSession = () => {
+        const demoSession = {
+            id: 'demo-' + Date.now(),
+            date: new Date().toISOString().split('T')[0],
+            time: '14:00',
+            studentName: 'Demo Student',
+            studentEmail: 'demo@example.com',
+            cost: 30,
+            topic: 'Maths Revision',
+            type: 'lesson',
+            paymentStatus: 'Paid'
+        };
+        const updatedHistory = [...sessionHistory, demoSession];
+        setSessionHistory(updatedHistory);
+        localStorage.setItem('tutor_session_history', JSON.stringify(updatedHistory));
+        window.dispatchEvent(new Event('storage'));
+        alert('Demo paid session added! Check the "Recent Sessions" table below.');
+    };
+
     // Calendar Helpers
     const getDaysInMonth = (date) => {
         const year = date.getFullYear();
@@ -1059,9 +1100,17 @@ const TeacherDashboard = () => {
                     </div>
                 ) : activeTab === 'earnings' ? (
                     <div className="max-w-3xl mx-auto space-y-6 animate-in slide-in-from-right-4 duration-300">
-                        <div className="text-center mb-8">
+                        <div className="text-center mb-8 relative">
                             <h2 className="text-3xl font-bold text-gray-900 mb-2">Earnings Dashboard</h2>
                             <p className="text-gray-500">Track your tutoring income</p>
+
+                            {/* Testing Mode Button */}
+                            <button
+                                onClick={addDemoPaidSession}
+                                className="mt-4 px-4 py-2 bg-yellow-100 text-yellow-700 rounded-lg text-xs font-bold hover:bg-yellow-200 transition-colors border border-yellow-200"
+                            >
+                                🧪 Testing Mode: Add Demo Paid Session
+                            </button>
                         </div>
 
                         {/* Main Earnings Cards */}
@@ -1121,23 +1170,34 @@ const TeacherDashboard = () => {
                         </div>
 
                         {/* Monthly Projection Breakdown */}
-                        <div className="bg-gradient-to-r from-purple-50 to-blue-50 rounded-2xl shadow-sm border border-purple-100 p-6">
-                            <h3 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">
-                                <span className="text-2xl">📅</span> {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                        <div className="space-y-4">
+                            <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2 px-1">
+                                <span className="text-2xl">📅</span> 3-Month Revenue Projection
                             </h3>
-                            <div className="grid grid-cols-3 gap-3 text-sm">
-                                <div className="bg-white/60 p-3 rounded-lg">
-                                    <div className="text-gray-600 text-xs uppercase mb-1">Booked Lessons</div>
-                                    <div className="text-2xl font-bold text-gray-900">{thisMonthBookings.filter(b => (Number(b.cost) || 0) > 0 || (b.type === 'lesson')).length}</div>
-                                </div>
-                                <div className="bg-white/60 p-3 rounded-lg">
-                                    <div className="text-gray-600 text-xs uppercase mb-1">Free Consultations</div>
-                                    <div className="text-2xl font-bold text-teal-600">{thisMonthBookings.filter(b => (b.cost || 30) === 0).length}</div>
-                                </div>
-                                <div className="bg-white/60 p-3 rounded-lg">
-                                    <div className="text-gray-600 text-xs uppercase mb-1">If All Fulfill</div>
-                                    <div className="text-2xl font-bold text-purple-600">£{projectedThisMonth}</div>
-                                </div>
+                            <div className="grid md:grid-cols-3 gap-4">
+                                {monthlyProjections.map((proj, idx) => (
+                                    <div key={idx} className={`rounded-2xl shadow-sm border p-5 transition-all ${idx === 0 ? 'bg-gradient-to-br from-purple-50 to-blue-50 border-purple-100' : 'bg-white border-gray-100 hover:border-purple-100'
+                                        }`}>
+                                        <div className="flex justify-between items-start mb-4">
+                                            <div className="font-bold text-gray-900">{proj.monthName}</div>
+                                            {idx === 0 && <span className="text-[10px] font-bold uppercase bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full">Current</span>}
+                                        </div>
+                                        <div className="space-y-3">
+                                            <div className="flex justify-between items-end">
+                                                <div className="text-gray-500 text-xs">Booked Lessons</div>
+                                                <div className="text-xl font-bold text-gray-900">{proj.bookedLessons}</div>
+                                            </div>
+                                            <div className="flex justify-between items-end">
+                                                <div className="text-gray-500 text-xs">Consultations</div>
+                                                <div className="text-xl font-bold text-teal-600">{proj.consultations}</div>
+                                            </div>
+                                            <div className="pt-3 border-t border-purple-100/50 flex justify-between items-end">
+                                                <div className="text-gray-900 text-xs font-bold font-display">Projected</div>
+                                                <div className="text-2xl font-bold text-purple-600">£{proj.projectedEarnings}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
 
