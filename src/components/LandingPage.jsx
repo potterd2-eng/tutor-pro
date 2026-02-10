@@ -241,6 +241,30 @@ const LandingPage = () => {
                     </div>
 
                     <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+                        {/* Sociology Card */}
+                        <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-all group">
+                            <div className="w-16 h-16 bg-purple-50 rounded-2xl flex items-center justify-center text-purple-600 mb-6 group-hover:scale-110 transition-transform">
+                                <Users size={32} />
+                            </div>
+                            <div className="flex justify-between items-start mb-4">
+                                <h3 className="text-2xl font-bold text-gray-900">Sociology</h3>
+                                <div className="flex gap-2">
+                                    <span className="px-3 py-1 bg-purple-100 text-purple-700 text-xs font-bold rounded-full">GCSE</span>
+                                    <span className="px-3 py-1 bg-purple-100 text-purple-700 text-xs font-bold rounded-full">A-Level</span>
+                                </div>
+                            </div>
+                            <p className="text-gray-600 leading-relaxed mb-6">
+                                Exploring society, culture, and identity. I specialize in making complex theories accessible and helping students master essay-writing techniques for top marks.
+                            </p>
+                            <ul className="space-y-3">
+                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-purple-500" /> Families and Households</li>
+                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-purple-500" /> Education</li>
+                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-purple-500" /> Crime and Deviance</li>
+                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-purple-500" /> Research Methods</li>
+                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-purple-500" /> General Inequalities</li>
+                            </ul>
+                        </div>
+
                         {/* Maths Card */}
                         <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-all group">
                             <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600 mb-6 group-hover:scale-110 transition-transform">
@@ -260,28 +284,6 @@ const LandingPage = () => {
                                 <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-blue-500" /> Exam Board Specific Prep (AQA, Edexcel)</li>
                                 <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-blue-500" /> Problem Solving & Logic</li>
                                 <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-blue-500" /> Grade 9-1 Targeting Strategies</li>
-                            </ul>
-                        </div>
-
-                        {/* Sociology Card */}
-                        <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-all group">
-                            <div className="w-16 h-16 bg-purple-50 rounded-2xl flex items-center justify-center text-purple-600 mb-6 group-hover:scale-110 transition-transform">
-                                <Users size={32} />
-                            </div>
-                            <div className="flex justify-between items-start mb-4">
-                                <h3 className="text-2xl font-bold text-gray-900">Sociology</h3>
-                                <div className="flex gap-2">
-                                    <span className="px-3 py-1 bg-purple-100 text-purple-700 text-xs font-bold rounded-full">GCSE</span>
-                                    <span className="px-3 py-1 bg-purple-100 text-purple-700 text-xs font-bold rounded-full">A-Level</span>
-                                </div>
-                            </div>
-                            <p className="text-gray-600 leading-relaxed mb-6">
-                                Exploring society, culture, and identity. I specialize in making complex theories accessible and helping students master essay-writing techniques for top marks.
-                            </p>
-                            <ul className="space-y-3">
-                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-purple-500" /> Research Methods & Theory</li>
-                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-purple-500" /> Essay Structuring Workshops</li>
-                                <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-purple-500" /> Critical Thinking & Analysis</li>
                             </ul>
                         </div>
                     </div>
