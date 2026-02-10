@@ -1,0 +1,184 @@
+import React, { useState, useEffect } from 'react';
+import { useParams, useSearchParams, Navigate, useNavigate } from 'react-router-dom';
+import Whiteboard from './Whiteboard';
+import VideoChat from './VideoChat';
+import Chat from './Chat';
+
+const Session = () => {
+    const { roomId } = useParams();
+    const [searchParams] = useSearchParams();
+    const navigate = useNavigate();
+    const isHost = searchParams.get('host') === 'true';
+    const studentName = searchParams.get('student'); // Keep original variable name
+    const sessionType = searchParams.get('type') || 'lesson'; // 'lesson' or 'consultation'
+    const isStudent = !isHost;
+
+    if (isStudent && !studentName) {
+        // Redirect to Login if no name provided
+        return <Navigate to={`/student-login?join=${roomId}`} replace />;
+    }
+
+    const displayName = studentName || 'Guest';
+
+    const [connection, setConnection] = useState(null);
+    const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+    const [showEndConfirm, setShowEndConfirm] = useState(false);
+
+    // Feedback Form State
+    const [lessonTopic, setLessonTopic] = useState('');
+    const [feedbackWell, setFeedbackWell] = useState('');
+    const [feedbackImprove, setFeedbackImprove] = useState('');
+    const [nextSteps, setNextSteps] = useState('');
+    const [lessonCost, setLessonCost] = useState(sessionType === 'consultation' ? 0 : 30);
+    const [paymentStatus, setPaymentStatus] = useState(sessionType === 'consultation' ? 'N/A' : 'Due');
+
+    // Check for Stripe payment success
+    useEffect(() => {
+        // Stripe redirects back with ?payment_success=true or ?session_id=xxx
+        if (searchParams.get('payment_success') === 'true' || searchParams.get('session_id')) {
+            setPaymentStatus('Paid');
+            alert('Payment received! ✅ Check your email for confirmation from Stripe.');
+            // Clean URL
+            window.history.replaceState({}, '', window.location.pathname);
+        }
+    }, [searchParams]);
+
+    const handleEndLesson = () => {
+        setShowEndConfirm(true);
+    };
+
+    const submitFeedback = (e) => {
+        e.preventDefault();
+
+        const sessionLog = {
+            id: Date.now().toString(),
+            date: new Date().toISOString(),
+            studentName: displayName,
+            topic: lessonTopic,
+            feedback_well: feedbackWell,
+            feedback_improve: feedbackImprove,
+            next_steps: nextSteps,
+            cost: lessonCost,
+            paymentStatus: paymentStatus,
+            type: sessionType
+        };
+
+        // Save to History
+        const history = JSON.parse(localStorage.getItem('tutor_session_history')) || [];
+        history.push(sessionLog);
+        localStorage.setItem('tutor_session_history', JSON.stringify(history));
+
+        // Cleanup: Remove from Bookings (so it's not double-counted as projected)
+        const bookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
+        const updatedBookings = bookings.filter(b => b.id !== roomId);
+        localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+
+        // Close connection
+        if (connection) connection.close();
+
+        // Redirect to respective dashboards
+        if (isHost) {
+            localStorage.setItem('teacher_dashboard_unlocked', 'true');
+            window.location.href = '/teacher';
+        } else {
+            window.location.href = `/student-dashboard?student=${encodeURIComponent(displayName)}`;
+        }
+    };
+
+    return (
+        <div className="relative w-screen h-screen overflow-hidden bg-brand-light">
+            <Whiteboard
+                connection={connection}
+                isHost={isHost}
+                sessionId={roomId}
+                studentName={displayName}
+                onEndLesson={handleEndLesson}
+            />
+            <VideoChat
+                roomId={roomId}
+                isStudent={isStudent}
+                isHost={isHost}
+                onConnection={setConnection}
+            />
+            <Chat connection={connection} isStudent={isStudent} />
+
+            {/* End Lesson Button (Host Only) - Handled in Whiteboard Header now */}
+
+            {/* End Lesson Confirmation Modal */}
+            {showEndConfirm && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+                    <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95">
+                        <h3 className="text-xl font-bold text-gray-900 mb-4">End Lesson?</h3>
+                        <p className="text-gray-600 mb-6">Are you sure you want to end the lesson? You'll be asked to provide feedback next.</p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setShowEndConfirm(false)}
+                                className="flex-1 py-3 text-gray-600 font-bold hover:bg-gray-50 rounded-xl transition-all"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setShowEndConfirm(false);
+                                    setShowFeedbackModal(true);
+                                }}
+                                className="flex-1 py-3 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 shadow-md transition-all"
+                            >
+                                End Lesson
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Feedback Modal */}
+            {showFeedbackModal && (
+                <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center backdrop-blur-sm">
+                    <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-lg w-full m-4 animate-in zoom-in-95">
+                        <h2 className="text-2xl font-bold text-gray-800 mb-6">Lesson Summary & Invoice</h2>
+                        <form onSubmit={submitFeedback} className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Topics Covered</label>
+                                <input required type="text" value={lessonTopic} onChange={e => setLessonTopic(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-purple-500 outline-none" placeholder="e.g. Algebra Basics" />
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">What went well?</label>
+                                    <textarea required value={feedbackWell} onChange={e => setFeedbackWell(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-green-500 outline-none h-24 text-sm" placeholder="Great focus today..." />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Improvements?</label>
+                                    <textarea required value={feedbackImprove} onChange={e => setFeedbackImprove(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-amber-500 outline-none h-24 text-sm" placeholder="Practice more..." />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Next Lesson</label>
+                                <textarea value={nextSteps} onChange={e => setNextSteps(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-purple-500 outline-none h-24" placeholder="E.g. Focus on quadratic equations" />
+                            </div>
+
+                            <button type="submit" className="w-full py-4 bg-purple-600 text-white rounded-xl font-bold shadow-lg hover:bg-purple-700 mt-6">
+                                Save Lesson Summary
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (isHost) {
+                                        localStorage.setItem('teacher_dashboard_unlocked', 'true');
+                                        window.location.href = '/teacher';
+                                    } else {
+                                        window.location.href = `/student-dashboard?student=${encodeURIComponent(displayName)}`;
+                                    }
+                                }}
+                                className="w-full py-3 text-gray-500 hover:text-gray-700 font-bold text-sm mt-2 transition-colors"
+                            >
+                                Skip for now
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default Session;

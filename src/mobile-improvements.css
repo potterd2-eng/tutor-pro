@@ -1,0 +1,101 @@
+/* Mobile-Friendly Tap Target Improvements */
+
+/* Ensure all interactive elements meet 44px minimum tap target */
+button,
+a.button,
+[role="button"],
+input[type="button"],
+input[type="submit"],
+.clickable {
+    min-height: 44px;
+    min-width: 44px;
+}
+
+.tap-target-bypass {
+    min-width: 0 !important;
+    min-height: 0 !important;
+}
+
+/* Time slot buttons - ensure adequate tap targets */
+button[class*="time"],
+button[class*="slot"],
+button[class*="chip"] {
+    min-height: 48px;
+    padding: 12px 16px;
+    margin: 4px;
+}
+
+/* Calendar day cells */
+button[class*="calendar"],
+button[class*="day"] {
+    min-height: 44px;
+    min-width: 44px;
+}
+
+/* Action buttons */
+button[class*="book"],
+button[class*="cancel"],
+button[class*="reschedule"],
+button[class*="confirm"] {
+    min-height: 48px;
+    padding: 12px 20px;
+}
+
+/* Tab buttons */
+button[class*="tab"] {
+    min-height: 44px;
+    padding: 12px 16px;
+}
+
+/* Input fields for better mobile UX */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="tel"],
+textarea,
+select {
+    min-height: 44px;
+    padding: 12px;
+    font-size: 16px;
+    /* Prevents zoom on iOS */
+}
+
+/* Increase spacing between interactive elements on mobile */
+@media (max-width: 768px) {
+
+    button+button,
+    a+a,
+    .interactive+.interactive {
+        margin-left: 8px;
+    }
+
+    /* Stack buttons vertically on very small screens */
+    @media (max-width: 480px) {
+        .button-group {
+            flex-direction: column;
+        }
+
+        .button-group button,
+        .button-group a {
+            width: 100%;
+            margin: 4px 0;
+        }
+    }
+}
+
+/* Prevent accidental double-taps */
+button:active,
+a:active {
+    opacity: 0.7;
+    transform: scale(0.98);
+}
+
+/* Improve touch feedback */
+button,
+a,
+[role="button"] {
+    -webkit-tap-highlight-color: rgba(0, 0, 0, 0.1);
+    touch-action: manipulation;
+    /* Prevents double-tap zoom */
+}
