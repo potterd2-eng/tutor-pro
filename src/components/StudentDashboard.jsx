@@ -1406,7 +1406,8 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
                                                                     </tr>
                                                                 )}
                                                             </React.Fragment>
-                                                        ));
+                                                        );
+                                                    });
                                                 })()}
                                             </tbody>
                                         </table>
