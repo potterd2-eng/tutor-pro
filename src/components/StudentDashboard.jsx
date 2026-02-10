@@ -23,6 +23,7 @@ const StudentDashboard = () => {
     const [rescheduleTarget, setRescheduleTarget] = useState(null); // The booking being rescheduled
     const [showRescheduleModal, setShowRescheduleModal] = useState(false); // Modal state
     const [bookTenWeeks, setBookTenWeeks] = useState(false); // Bulk booking togglestate
+    const [expandedBlockId, setExpandedBlockId] = useState(null); // For showing details of block bookings
 
     const [showReviewModal, setShowReviewModal] = useState(false);
     const [showNoteModal, setShowNoteModal] = useState(false);
@@ -1280,59 +1281,132 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
                                                         }
                                                     });
 
-                                                    return rows.map((invoice) => (
-                                                        <tr key={invoice.id || Math.random()} className="hover:bg-gray-50 transition-colors">
-                                                            <td className="p-4">
-                                                                <div className="font-bold text-gray-700">{new Date(invoice.date).toLocaleDateString()}</div>
-                                                                {invoice.isGroup && <div className="text-xs text-purple-600 font-medium">Starts {invoice.time}</div>}
-                                                                {!invoice.isGroup && <div className="text-xs text-gray-400">{invoice.time}</div>}
-                                                            </td>
-                                                            <td className="p-4 text-gray-600 text-sm">
-                                                                {invoice.subject || invoice.topic || 'Tutoring Session'}
-                                                                {invoice.isGroup && <span className="ml-2 text-xs bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full font-bold">10 Sessions</span>}
-                                                            </td>
-                                                            <td className="p-4 font-bold text-gray-900">£{invoice.cost || 30}</td>
-                                                            <td className="p-4">
-                                                                <span className={`px-2 py-1 rounded-full text-xs font-bold ${(invoice.paymentStatus || 'Due') === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                                                    {invoice.paymentStatus || 'Due'}
-                                                                </span>
-                                                            </td>
-                                                            <td className="p-4">
-                                                                {invoice.isGroup ? (
-                                                                    <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-lg font-bold uppercase tracking-wider border border-gray-200">
-                                                                        Series
-                                                                    </span>
-                                                                ) : (invoice.feedback_well || invoice.lessonTopic ? (
-                                                                    <span className="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-lg font-black uppercase tracking-wider border border-blue-200 shadow-sm">
-                                                                        Completed
-                                                                    </span>
-                                                                ) : (
-                                                                    <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-lg font-bold uppercase tracking-wider border border-gray-200">
-                                                                        Scheduled
-                                                                    </span>
-                                                                ))}
-                                                            </td>
-                                                            <td className="p-4 text-right">
-                                                                {invoice.paymentStatus !== 'Paid' ? (
-                                                                    <div className="flex gap-2 justify-end">
-                                                                        <button
-                                                                            onClick={() => handlePay(invoice)}
-                                                                            className="bg-blue-600 text-white px-6 py-2 rounded-lg text-xs font-bold hover:bg-blue-700 shadow-md transition-all"
-                                                                        >
-                                                                            Pay via Stripe
-                                                                        </button>
-                                                                    </div>
-                                                                ) : (
-                                                                    <button
-                                                                        onClick={() => handleReceipt(invoice)}
-                                                                        className="text-teal-600 hover:text-teal-700 flex items-center gap-1 justify-end w-full text-xs font-bold transition-colors"
-                                                                    >
-                                                                        <FileText size={14} /> Receipt
-                                                                    </button>
+                                                    // Find next due item (earliest unpaid) for global context before mapping?
+                                                    // No, we can do it once.
+                                                    const unpaidRows = rows.filter(r => r.paymentStatus !== 'Paid').sort((a, b) => new Date(a.date) - new Date(b.date));
+                                                    const nextDueId = unpaidRows.length > 0 ? unpaidRows[0].id : null;
+
+                                                    return rows.map((invoice) => {
+                                                        // Determine Status Label and Color
+                                                        let statusLabel = invoice.paymentStatus || 'Due';
+                                                        let statusColor = '';
+
+                                                        if (invoice.paymentStatus === 'Paid') {
+                                                            statusLabel = 'Completed';
+                                                            statusColor = 'bg-green-100 text-green-700 border border-green-200';
+                                                        } else {
+                                                            if (invoice.id === nextDueId) {
+                                                                statusLabel = 'Due';
+                                                                statusColor = 'bg-red-100 text-red-700 border border-red-200 font-bold animate-pulse';
+                                                            } else {
+                                                                statusLabel = 'Unpaid';
+                                                                statusColor = 'bg-gray-100 text-gray-500 border border-gray-200';
+                                                            }
+                                                        }
+
+                                                        return (
+                                                            <React.Fragment key={invoice.id || Math.random()}>
+                                                                <tr className="hover:bg-gray-50 transition-colors">
+                                                                    <td className="p-4">
+                                                                        <div className="font-bold text-gray-700">{new Date(invoice.date).toLocaleDateString()}</div>
+                                                                        {invoice.isGroup && <div className="text-xs text-purple-600 font-medium">Starts {invoice.time}</div>}
+                                                                        {!invoice.isGroup && <div className="text-xs text-gray-400">{invoice.time}</div>}
+                                                                    </td>
+                                                                    <td className="p-4 text-gray-600 text-sm">
+                                                                        {invoice.subject || invoice.topic || 'Tutoring Session'}
+                                                                        {invoice.isGroup && (
+                                                                            <div className="mt-1">
+                                                                                <span className="text-xs bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full font-bold">10 Sessions</span>
+                                                                                <button
+                                                                                    onClick={() => setExpandedBlockId(expandedBlockId === invoice.id ? null : invoice.id)}
+                                                                                    className="ml-2 text-xs text-purple-700 underline hover:text-purple-900"
+                                                                                >
+                                                                                    {expandedBlockId === invoice.id ? 'Hide Dates' : 'Show Dates'}
+                                                                                </button>
+                                                                            </div>
+                                                                        )}
+                                                                    </td>
+                                                                    <td className="p-4 font-bold text-gray-900">£{invoice.cost || 30}</td>
+                                                                    <td className="p-4">
+                                                                        <span className={`px-2 py-1 rounded-full text-xs font-bold ${statusColor}`}>
+                                                                            {statusLabel}
+                                                                        </span>
+                                                                    </td>
+                                                                    <td className="p-4">
+                                                                        {invoice.isGroup ? (
+                                                                            <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-lg font-bold uppercase tracking-wider border border-gray-200">
+                                                                                Series
+                                                                            </span>
+                                                                        ) : (invoice.feedback_well || invoice.lessonTopic ? (
+                                                                            <span className="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-lg font-black uppercase tracking-wider border border-blue-200 shadow-sm">
+                                                                                Completed
+                                                                            </span>
+                                                                        ) : (
+                                                                            <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-lg font-bold uppercase tracking-wider border border-gray-200">
+                                                                                Scheduled
+                                                                            </span>
+                                                                        ))}
+                                                                    </td>
+                                                                    <td className="p-4 text-right">
+                                                                        {invoice.paymentStatus !== 'Paid' ? (
+                                                                            <div className="flex gap-2 justify-end">
+                                                                                <button
+                                                                                    onClick={() => handlePay(invoice)}
+                                                                                    className="bg-blue-600 text-white px-6 py-2 rounded-lg text-xs font-bold hover:bg-blue-700 shadow-md transition-all"
+                                                                                >
+                                                                                    Pay via Stripe
+                                                                                </button>
+                                                                            </div>
+                                                                        ) : (
+                                                                            <button
+                                                                                onClick={() => handleReceipt(invoice)}
+                                                                                className="text-teal-600 hover:text-teal-700 flex items-center gap-1 justify-end w-full text-xs font-bold transition-colors"
+                                                                            >
+                                                                                <FileText size={14} /> Receipt
+                                                                            </button>
+                                                                        )}
+                                                                    </td>
+                                                                </tr>
+                                                                {invoice.isGroup && expandedBlockId === invoice.id && (
+                                                                    <tr>
+                                                                        <td colSpan="6" className="bg-purple-50 p-4 rounded-xl">
+                                                                            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                                                                                {/* We need to re-fetch or pass the series items here. 
+                                                                                In the mapping above, we have `seriesIds`, but not the full objects in `rows`. 
+                                                                                Ideally, we should store the series items in `invoice.items` or similar.
+                                                                                Let's check the logic above. We have `invoice.seriesIds` and logic to filter `allMetrics`.
+                                                                                But we can't access `allMetrics` easily here inside `rows.map`.
+                                                                                WAIT: `allMetrics` was defined in the scope above `rows`.
+                                                                                So we can re-filter or better yet, attach the items to the row object.
+                                                                            */}
+                                                                                {(() => {
+                                                                                    // Re-fetching logic from scope? No, `allMetrics` is local to the render block?
+                                                                                    // Yes, line 1253: `const seriesItems = allMetrics.filter...`
+                                                                                    // But we didn't attach `seriesItems` to the `rows` object, only `seriesIds`.
+                                                                                    // Let's modify the previous logic to attach `seriesItems` to `invoice`.
+                                                                                    // BUT I can't modify the previous logic in this generic replacement without a huge block.
+                                                                                    // Workaround: Use the `bookings` or `history` state which is in scope of the component?
+                                                                                    // `bookings` and `history` are state variables!
+                                                                                    // We can find them by `invoice.id` (recurringId).
+
+                                                                                    const allItems = [...bookings, ...history];
+                                                                                    const series = allItems.filter(i => i.recurringId === invoice.id || (i.id && typeof i.id === 'string' && i.id.startsWith(invoice.id)));
+                                                                                    series.sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+
+                                                                                    return series.map((s, i) => (
+                                                                                        <div key={i} className="bg-white p-2 rounded border border-purple-100 text-center">
+                                                                                            <div className="text-xs font-bold text-gray-500">Lesson {i + 1}</div>
+                                                                                            <div className="font-bold text-purple-700">{new Date(s.date).toLocaleDateString()}</div>
+                                                                                            <div className="text-xs text-gray-400">{s.time}</div>
+                                                                                        </div>
+                                                                                    ));
+                                                                                })()}
+                                                                            </div>
+                                                                        </td>
+                                                                    </tr>
                                                                 )}
-                                                            </td>
-                                                        </tr>
-                                                    ));
+                                                            </React.Fragment>
+                                                        ));
                                                 })()}
                                             </tbody>
                                         </table>

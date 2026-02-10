@@ -215,7 +215,7 @@ const LandingPage = () => {
 
             {/* Stats / Features Strip */}
             <div className="bg-white py-12 border-y border-gray-100">
-                <div className="max-w-6xl mx-auto px-6 grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+                <div className="max-w-6xl mx-auto px-6 flex flex-wrap justify-center gap-12 text-center">
                     {[
                         { icon: Star, label: "5-Star Reviews", val: "50+" },
                         { icon: Clock, label: "Tutoring Hours", val: "550+" },

@@ -183,5 +183,26 @@ Please allow 5-10 business days for this to appear in your account.`;
 
     async sendReminder(bookingData) {
         console.log('Reminder logic would trigger here');
+    },
+
+    /**
+     * Send a notification to teacher about payment override
+     */
+    async sendPaymentOverriddenNotification(studentName, date) {
+        try {
+            if (!EMAILJS_PUBLIC_KEY) return;
+            // Reusing Teacher Template but with specific subject/type to alert teacher
+            await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEACHER_TEMPLATE_ID, {
+                student_name: studentName,
+                student_email: "System Alert",
+                subject: "PAYMENT EXCEPTION USED",
+                date: date,
+                time: new Date().toLocaleTimeString(),
+                booking_type: "URGENT: Payment Override",
+                to_email: TEACHER_EMAIL
+            }, EMAILJS_PUBLIC_KEY);
+        } catch (error) {
+            console.error('Failed to send payment override notification:', error);
+        }
     }
 };

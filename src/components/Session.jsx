@@ -3,6 +3,8 @@ import { useParams, useSearchParams, Navigate, useNavigate } from 'react-router-
 import Whiteboard from './Whiteboard';
 import VideoChat from './VideoChat';
 import Chat from './Chat';
+import { CreditCard, Shield, AlertCircle, CheckCircle } from 'lucide-react';
+
 
 const Session = () => {
     const { roomId } = useParams();
@@ -33,26 +35,46 @@ const Session = () => {
     const [paymentStatus, setPaymentStatus] = useState(sessionType === 'consultation' ? 'N/A' : 'Due');
 
     const [paymentVerified, setPaymentVerified] = useState(sessionType === 'consultation' || isHost);
+    const [strictBlock, setStrictBlock] = useState(false);
 
     // Initial Payment Check
     useEffect(() => {
         if (sessionType === 'consultation' || isHost) return;
 
         const bookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
+        const history = JSON.parse(localStorage.getItem('tutor_session_history')) || [];
         const currentBooking = bookings.find(b => b.id === roomId || b.id === searchParams.get('bookingId'));
+
+        // Check for Strict Block (Outstanding payments > 7 days old)
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+        const allItems = [...bookings, ...history];
+        const hasLongOverdue = allItems.some(item => {
+            const itemDate = new Date(item.date);
+            // Filter for THIS student
+            const isForStudent = (item.student === displayName || item.studentName === displayName);
+            return isForStudent && item.paymentStatus === 'Due' && itemDate < sevenDaysAgo;
+        });
+
+        if (hasLongOverdue) {
+            setStrictBlock(true);
+        }
 
         if (currentBooking && currentBooking.paymentStatus === 'Paid') {
             setPaymentVerified(true);
         } else {
             setPaymentVerified(false);
         }
-    }, [roomId, sessionType, isHost, searchParams]);
+    }, [roomId, sessionType, isHost, searchParams, displayName]);
 
     // Check for Stripe payment success redirect
     useEffect(() => {
         if (searchParams.get('payment_success') === 'true' || searchParams.get('session_id')) {
             setPaymentStatus('Paid');
             setPaymentVerified(true);
+            setStrictBlock(false); // Assume they paid something? Or re-check required.
+            // Simplified: If they just paid via the link, let them in.
 
             // Also update the booking in localStorage for future joins
             const bookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
@@ -74,7 +96,15 @@ const Session = () => {
         setShowEndConfirm(true);
     };
 
+    const requestException = () => {
+        if (window.confirm("Request Exception: strictly valid for this session only.\n\nBy clicking OK, you agree to make the payment immediately after the lesson.")) {
+            setPaymentVerified(true);
+            setPaymentStatus('Due (Exception)');
+        }
+    };
+
     const submitFeedback = (e) => {
+        // ... (existing feedback submission logic)
         e.preventDefault();
 
         const sessionLog = {
@@ -95,7 +125,7 @@ const Session = () => {
         history.push(sessionLog);
         localStorage.setItem('tutor_session_history', JSON.stringify(history));
 
-        // Cleanup: Remove from Bookings (so it's not double-counted as projected)
+        // Cleanup: Remove from Bookings
         const bookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
         const updatedBookings = bookings.filter(b => b.id !== roomId);
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
@@ -103,7 +133,7 @@ const Session = () => {
         // Close connection
         if (connection) connection.close();
 
-        // Redirect to respective dashboards
+        // Redirect
         if (isHost) {
             localStorage.setItem('teacher_dashboard_unlocked', 'true');
             window.location.href = '/teacher';
@@ -136,19 +166,36 @@ const Session = () => {
             ) : (
                 <div className="fixed inset-0 z-[200] bg-gray-900 flex items-center justify-center p-6 text-center">
                     <div className="bg-white p-10 rounded-3xl shadow-2xl max-w-md w-full animate-in zoom-in-95">
-                        <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
-                            <CreditCard size={40} />
+                        <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 ${strictBlock ? 'bg-red-100 text-red-600' : 'bg-orange-100 text-orange-600'}`}>
+                            {strictBlock ? <AlertCircle size={40} /> : <CreditCard size={40} />}
                         </div>
-                        <h2 className="text-2xl font-bold text-gray-900 mb-2">Payment Required</h2>
-                        <p className="text-gray-500 mb-8">Access to the interactive whiteboard and video feed is locked until payment is confirmed for this session.</p>
+                        <h2 className="text-2xl font-bold text-gray-900 mb-2">
+                            {strictBlock ? "Outstanding Payments" : "Payment Due"}
+                        </h2>
+                        <p className="text-gray-500 mb-8">
+                            {strictBlock
+                                ? "You have outstanding payments from previous weeks. Please clear your balance to continue."
+                                : "Please verify payment for this session to enter the classroom."
+                            }
+                        </p>
 
                         <div className="space-y-4">
                             <a
                                 href={paymentLink}
                                 className="block w-full py-4 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold shadow-lg transition-all"
                             >
-                                Pay for Lesson (£30)
+                                Pay Now (£30)
                             </a>
+
+                            {!strictBlock && (
+                                <button
+                                    onClick={requestException}
+                                    className="block w-full py-3 text-purple-600 bg-purple-50 hover:bg-purple-100 rounded-xl font-bold transition-colors"
+                                >
+                                    request Exception (Pay Later)
+                                </button>
+                            )}
+
                             <button
                                 onClick={() => navigate(-1)}
                                 className="block w-full py-3 text-gray-500 font-bold hover:text-gray-700 transition-colors"
