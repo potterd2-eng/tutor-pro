@@ -740,7 +740,7 @@ const TeacherDashboard = () => {
                             Unlock Dashboard
                         </button>
                     </form>
-                    <button onClick={() => navigate('/')} className="mt-6 text-gray-400 hover:text-gray-600 text-sm font-bold">Back to Home</button>
+                    <button onClick={() => window.location.href = '/'} className="mt-6 text-purple-600 hover:text-purple-800 text-sm font-bold hover:underline">Back to Home</button>
                 </div>
             </div>
         );
