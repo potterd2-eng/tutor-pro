@@ -3,8 +3,9 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
     Clock, Calendar, Video, MessageSquare, Star,
     CheckCircle, AlertCircle, TrendingUp, CreditCard,
-    FileText, ChevronRight, LogOut, Plus, ArrowRight, X
+    FileText, ChevronRight, LogOut, Plus, ArrowRight, X, Trash2
 } from 'lucide-react';
+import { emailService } from '../utils/email';
 
 const StudentDashboard = () => {
     const navigate = useNavigate();
@@ -318,20 +319,33 @@ const StudentDashboard = () => {
 
     const markAsPaid = (invoiceId) => {
         // Update HISTORY
-        const allHistory = JSON.parse(localStorage.getItem('tutor_session_history')) || [];
-        let updatedHistory = allHistory.map(h =>
-            h.id === invoiceId ? { ...h, paymentStatus: 'Paid' } : h
-        );
+        const allHistory = JSON.parse(localStorage.getItem('tutor_session_history') || '[]');
+        const target = allHistory.find(h => h.id === invoiceId);
+
+        // Update target and potentially other recurring ones
+        const updatedHistory = allHistory.map(h => {
+            if (h.id === invoiceId) return { ...h, paymentStatus: 'Paid' };
+            // If the paid one was a bulk payment (£280) or part of a recurring series
+            if (target && target.recurringId && h.recurringId === target.recurringId) {
+                return { ...h, paymentStatus: 'Paid' };
+            }
+            return h;
+        });
+
         localStorage.setItem('tutor_session_history', JSON.stringify(updatedHistory));
-        setHistory(prev => prev.map(h => h.id === invoiceId ? { ...h, paymentStatus: 'Paid' } : h));
+        setHistory(updatedHistory.filter(h => h.studentId === student.id || h.student === student.name));
 
         // Update BOOKINGS
-        const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
-        let updatedBookings = allBookings.map(b =>
-            b.id === invoiceId ? { ...b, paymentStatus: 'Paid' } : b
-        );
+        const allBookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+        const updatedBookings = allBookings.map(b => {
+            if (b.id === invoiceId) return { ...b, paymentStatus: 'Paid' };
+            if (target && target.recurringId && b.recurringId === target.recurringId) {
+                return { ...b, paymentStatus: 'Paid' };
+            }
+            return b;
+        });
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
-        setBookings(prev => prev.map(b => b.id === invoiceId ? { ...b, paymentStatus: 'Paid' } : b));
+        setBookings(updatedBookings.filter(b => b.studentId === student.id || b.student === student.name));
 
         window.dispatchEvent(new Event('storage'));
     };
@@ -421,6 +435,14 @@ const StudentDashboard = () => {
             });
             localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
             setNotification({ type: 'success', message: 'Reschedule Request Sent! Your teacher will confirm shortly.' });
+
+            // Notify Teacher
+            emailService.sendRescheduleRequest({
+                ...rescheduleTarget,
+                requestedDate: selectedSlot.date,
+                requestedTime: selectedSlot.time
+            }, 'student');
+
             setShowBookingModal(false);
             window.dispatchEvent(new Event('storage'));
         } else {
@@ -626,10 +648,36 @@ const StudentDashboard = () => {
                 return b;
             });
             alert("Reschedule Declined. Keeping original time.");
+            // Notify Teacher of Decline
+            emailService.sendRescheduleResponse(booking, 'Declined');
         }
 
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
         window.dispatchEvent(new Event('storage'));
+
+        if (accepted) {
+            // Notify Teacher of Approval
+            emailService.sendRescheduleResponse(booking, 'Approved');
+        }
+    };
+
+    const cancelBooking = (booking) => {
+        if (!window.confirm("Are you sure you want to cancel this lesson?")) return;
+
+        const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
+        const updatedBookings = allBookings.map(b => b.id === booking.id ? { ...b, status: 'cancelled' } : b);
+
+        // Free the slot
+        const allSlots = JSON.parse(localStorage.getItem('tutor_lesson_slots')) || [];
+        const updatedSlots = allSlots.map(s => (s.date === booking.date && s.time === booking.time) ? { ...s, bookedBy: null } : s);
+
+        localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+        localStorage.setItem('tutor_lesson_slots', JSON.stringify(updatedSlots));
+        window.dispatchEvent(new Event('storage'));
+        setNotification({ type: 'success', message: 'Lesson Cancelled.' });
+
+        // Notify Teacher
+        emailService.sendCancellationNotice(booking, 'student');
     };
 
     // Calculate Stats
@@ -909,6 +957,13 @@ const StudentDashboard = () => {
                                                     >
                                                         {booking.status === 'pending_reschedule' ? 'Pending' : 'Reschedule'}
                                                     </button>
+                                                    <button
+                                                        onClick={() => cancelBooking(booking)}
+                                                        className="p-2.5 bg-white border border-gray-200 hover:border-red-200 hover:text-red-600 text-gray-400 rounded-xl font-bold transition-all text-sm"
+                                                        title="Cancel Lesson"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
                                                 </div>
                                             </div>
                                         ))}
@@ -929,8 +984,8 @@ const StudentDashboard = () => {
                         {/* Review Modal */}
                         {
                             showReviewModal && reviewTarget && (
-                                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowReviewModal(false)}>
-                                    <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setShowReviewModal(false)}>
+                                    <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                                         <div className="text-center mb-6">
                                             <div className="w-16 h-16 bg-yellow-100 text-yellow-500 rounded-full flex items-center justify-center mx-auto mb-4">
                                                 <Star size={32} fill="currentColor" />
@@ -1179,15 +1234,9 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
                                                                     <div className="flex gap-2 justify-end">
                                                                         <button
                                                                             onClick={() => handlePay(invoice)}
-                                                                            className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-blue-700 shadow-md transition-all"
+                                                                            className="bg-blue-600 text-white px-6 py-2 rounded-lg text-xs font-bold hover:bg-blue-700 shadow-md transition-all"
                                                                         >
-                                                                            Pay Card
-                                                                        </button>
-                                                                        <button
-                                                                            onClick={() => handleBankPay(invoice)}
-                                                                            className="bg-teal-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-teal-700 shadow-md transition-all flex items-center gap-1"
-                                                                        >
-                                                                            <TrendingUp size={12} /> Open Banking
+                                                                            Pay via Stripe
                                                                         </button>
                                                                     </div>
                                                                 ) : (
@@ -1300,7 +1349,7 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
             {/* Booking Modal */}
             {
                 showBookingModal && selectedSlot && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
                         <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
                             <div className="bg-teal-600 p-6 text-white">
                                 <h3 className="text-2xl font-bold mb-1">{rescheduleTarget ? 'Confirm Reschedule' : 'Book Your Lesson'}</h3>
@@ -1371,8 +1420,8 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
             {/* Reschedule Info Modal */}
             {
                 showRescheduleModal && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowRescheduleModal(false)}>
-                        <div className="bg-white p-8 rounded-3xl shadow-xl max-w-sm w-full animate-in zoom-in-95 text-center max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setShowRescheduleModal(false)}>
+                        <div className="bg-white p-8 rounded-3xl shadow-xl max-w-sm w-full animate-in zoom-in-95 text-center" onClick={e => e.stopPropagation()}>
                             <div className="w-16 h-16 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center mx-auto mb-6">
                                 <Clock size={32} />
                             </div>
@@ -1393,7 +1442,7 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
 
             {/* Notification Modal */}
             {notification && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4" onClick={() => setNotification(null)}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setNotification(null)}>
                     <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 text-center max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${notification.type === 'error' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
                             {notification.type === 'error' ? <AlertCircle size={24} /> : <CheckCircle size={24} />}
@@ -1411,8 +1460,8 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
 
             {/* Confirmation Modal */}
             {confirmation && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
-                    <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
+                    <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                         <h3 className="text-xl font-bold text-gray-900 mb-4">Confirmation Required</h3>
                         <p className="text-gray-600 mb-8 whitespace-pre-wrap">{confirmation.message}</p>
                         <div className="flex gap-3">
@@ -1435,8 +1484,8 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
 
             {/* Payment Modal (Stripe Style) */}
             {paymentTarget && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
-                    <div className="bg-white p-0 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
+                    <div className="bg-white p-0 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                         <div className="bg-gray-50 p-6 border-b border-gray-100 flex justify-between items-center">
                             <div className="flex items-center gap-2">
                                 <CreditCard className="text-teal-600" />
@@ -1450,29 +1499,31 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
                                 <div className="text-gray-500 text-sm uppercase font-bold tracking-wider mb-1">Total Amount</div>
                                 <div className="text-4xl font-bold text-gray-900">£{paymentTarget.cost || 30}.00</div>
                                 <div className="text-sm text-gray-500 mt-2">
-                                    Session on {new Date(paymentTarget.date).toLocaleDateString()}
+                                    {paymentTarget.cost === 280 ? '10-Lesson Bulk Block' : `Session on ${new Date(paymentTarget.date).toLocaleDateString()}`}
                                 </div>
                             </div>
 
                             <div className="space-y-3 mb-6">
-                                <div className="text-xs font-bold text-gray-400 uppercase text-center mb-2">Select Payment Link</div>
-                                <a
-                                    href="https://buy.stripe.com/14A3cv5wzglh1gyai7eIw00"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block w-full py-4 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 transition-all shadow-lg flex items-center justify-center gap-2 text-center"
-                                >
-                                    Pay Single Lesson (£30) <ArrowRight size={18} />
-                                </a>
-
-                                <a
-                                    href="https://buy.stripe.com/eVqbJ1bUX1qnbVcdujeIw01"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block w-full py-4 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 transition-all shadow-lg flex items-center justify-center gap-2 text-center"
-                                >
-                                    Pay 10-Lesson Block (£280) <ArrowRight size={18} />
-                                </a>
+                                <div className="text-xs font-bold text-gray-400 uppercase text-center mb-2">Secure Stripe Link</div>
+                                {paymentTarget.cost === 280 ? (
+                                    <a
+                                        href="https://buy.stripe.com/eVqbJ1bUX1qnbVcdujeIw01"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="block w-full py-4 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 transition-all shadow-lg flex items-center justify-center gap-2 text-center"
+                                    >
+                                        Complete £280 Payment <ArrowRight size={18} />
+                                    </a>
+                                ) : (
+                                    <a
+                                        href="https://buy.stripe.com/14A3cv5wzglh1gyai7eIw00"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="block w-full py-4 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 transition-all shadow-lg flex items-center justify-center gap-2 text-center"
+                                    >
+                                        Complete £30 Payment <ArrowRight size={18} />
+                                    </a>
+                                )}
                             </div>
 
                             <div className="bg-orange-50 p-4 rounded-xl border border-orange-100 text-center">
@@ -1489,7 +1540,7 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
                                 </button>
                             </div>
 
-                            <div className="flex justify-center gap-4 mt-6 opacity-50 grayscale">
+                            <div className="flex justify-center gap-4 mt-6 opacity-30 grayscale">
                                 <span className="text-xs font-bold">Powered by Stripe</span>
                             </div>
                         </div>
@@ -1539,8 +1590,8 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
 
             {/* Receipt Modal */}
             {receiptTarget && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
-                    <div className="bg-white p-0 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
+                    <div className="bg-white p-0 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                         <div className="bg-gradient-to-r from-teal-500 to-teal-600 p-6 text-white">
                             <div className="flex justify-between items-start">
                                 <div>

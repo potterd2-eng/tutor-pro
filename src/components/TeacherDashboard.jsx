@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, User, Video, Trash2, GraduationCap, ArrowRight, Settings, Check, X, Clock, AlertCircle, CheckCircle, ChevronLeft, ChevronRight, Shield, Calendar, MessageSquare } from 'lucide-react';
+import { emailService } from '../utils/email';
 
 const TeacherDashboard = () => {
     const navigate = useNavigate();
@@ -396,7 +397,9 @@ const TeacherDashboard = () => {
                 status: 'confirmed',
                 recurringId: recurringId,
                 seriesIndex: i + 1,
-                totalSeries: weeks
+                totalSeries: weeks,
+                cost: (weeks === 10) ? (i === 0 ? 280 : 0) : 30, // Bulk price for 10 weeks, else standard 30
+                paymentStatus: 'Due'
             });
 
             // Handle Slot (Create if doesn't exist, Update if does)
@@ -525,11 +528,10 @@ const TeacherDashboard = () => {
         setBookings(updatedBookings);
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
 
-        // Note: We don't free the old slots yet until confirmed? 
-        // actually, we should probably HOLD the new slots too?
-        // For "Pending Approval", we ideally want to RESERVE the new slot.
-        // Let's skip complex reservation logic for a second and just mark the booking.
-        // The Student Dashboard will show the proposal.
+        // Send Email Notification to Student
+        proposedBookings.forEach(pb => {
+            emailService.sendRescheduleRequest(pb, 'teacher');
+        });
 
         setRescheduleTarget(null);
         window.dispatchEvent(new Event('storage'));
@@ -574,7 +576,10 @@ const TeacherDashboard = () => {
         setBookings(updatedBookings);
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings)); // Fixed key
         window.dispatchEvent(new Event('storage'));
-        // alert('Reschedule Approved!');
+
+        // Notify Student
+        emailService.sendRescheduleResponse(booking, 'Approved');
+
         setRescheduleConfirm(null);
     };
 
@@ -611,8 +616,33 @@ const TeacherDashboard = () => {
         setBookings(updatedBookings);
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
         window.dispatchEvent(new Event('storage'));
-        // alert('Reschedule Denied.');
+
+        // Notify Student
+        emailService.sendRescheduleResponse(booking, 'Denied');
+
         setRescheduleConfirm(null);
+    };
+
+    const handleRefund = (session) => {
+        if (!window.confirm(`Are you sure you want to mark session for ${session.studentName} as Refunded? This will notify the student.`)) return;
+
+        const history = JSON.parse(localStorage.getItem('tutor_session_history')) || [];
+        const updatedHistory = history.map(s => s.id === session.id ? { ...s, paymentStatus: 'Refunded' } : s);
+
+        localStorage.setItem('tutor_session_history', JSON.stringify(updatedHistory));
+        window.dispatchEvent(new Event('storage'));
+
+        // Notify Student
+        emailService.sendRefundNotice({
+            student: session.studentName,
+            email: session.studentEmail || 'student@example.com',
+            date: session.date,
+            time: session.time,
+            cost: session.cost,
+            subject: session.topic
+        });
+
+        alert('Session marked as Refunded. Reminder: Please process the actual refund in your Stripe Dashboard.');
     };
 
     // Calendar Helpers
@@ -1110,6 +1140,58 @@ const TeacherDashboard = () => {
                                 </div>
                             </div>
                         </div>
+
+                        {/* Recent Completed Sessions with Refund Option */}
+                        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                            <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                                <span className="text-2xl">📝</span> Recent Sessions
+                            </h3>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left text-sm">
+                                    <thead>
+                                        <tr className="border-b border-gray-100">
+                                            <th className="py-3 font-bold text-gray-400 uppercase text-[10px]">Date</th>
+                                            <th className="py-3 font-bold text-gray-400 uppercase text-[10px]">Student</th>
+                                            <th className="py-3 font-bold text-gray-400 uppercase text-[10px]">Amount</th>
+                                            <th className="py-3 font-bold text-gray-400 uppercase text-[10px]">Status</th>
+                                            <th className="py-3 font-bold text-gray-400 uppercase text-[10px]">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-50">
+                                        {sessionHistory.length === 0 ? (
+                                            <tr>
+                                                <td colSpan="5" className="py-8 text-center text-gray-400 italic">No completed sessions yet.</td>
+                                            </tr>
+                                        ) : (
+                                            sessionHistory.slice(-10).reverse().map(session => (
+                                                <tr key={session.id} className="hover:bg-gray-50/50 transition-colors">
+                                                    <td className="py-4 font-medium text-gray-700">{new Date(session.date).toLocaleDateString()}</td>
+                                                    <td className="py-4 font-bold text-gray-900">{session.studentName}</td>
+                                                    <td className="py-4 font-bold text-gray-900">£{session.cost || 30}</td>
+                                                    <td className="py-4">
+                                                        <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${session.paymentStatus === 'Paid' ? 'bg-green-100 text-green-700' :
+                                                            session.paymentStatus === 'Refunded' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'
+                                                            }`}>
+                                                            {session.paymentStatus}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-4">
+                                                        {session.paymentStatus === 'Paid' && (
+                                                            <button
+                                                                onClick={() => handleRefund(session)}
+                                                                className="text-xs font-bold text-red-500 hover:underline"
+                                                            >
+                                                                Refund
+                                                            </button>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
                 ) : activeTab === 'messages' ? (
                     <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
@@ -1262,8 +1344,8 @@ const TeacherDashboard = () => {
                 {/* Date Details Modal */}
                 {
                     selectedDate && (
-                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setSelectedDate(null)}>
-                            <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-2xl w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setSelectedDate(null)}>
+                            <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-2xl w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                                 <div className="flex justify-between items-center mb-6">
                                     <h3 className="text-xl font-bold text-gray-900">
                                         {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
@@ -1312,6 +1394,10 @@ const TeacherDashboard = () => {
                                                                         setBookings(updated);
                                                                         localStorage.setItem('tutor_bookings', JSON.stringify(updated));
                                                                         window.dispatchEvent(new Event('storage'));
+
+                                                                        // Notify Student of Cancellation
+                                                                        emailService.sendCancellationNotice(booking, 'teacher');
+
                                                                         setSelectedDate(null);
                                                                     }
                                                                 }}
@@ -1446,8 +1532,8 @@ const TeacherDashboard = () => {
                 {/* Weekly Schedule Settings Modal */}
                 {
                     showScheduleModal && (
-                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 text-left" onClick={() => setShowScheduleModal(false)}>
-                            <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 text-left overflow-y-auto pt-8 pb-8" onClick={() => setShowScheduleModal(false)}>
+                            <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                                 <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                                     <div>
                                         <h2 className="text-xl font-bold text-gray-900">Consultation Hours (Weekly)</h2>
@@ -1521,8 +1607,8 @@ const TeacherDashboard = () => {
                 {/* Recurring Booking Modal */}
                 {
                     showRecurringModal && (
-                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowRecurringModal(false)}>
-                            <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setShowRecurringModal(false)}>
+                            <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                                 <h3 className="text-xl font-bold text-gray-900 mb-4">Book Recurring Lessons</h3>
                                 <form onSubmit={handleRecurringBooking} className="space-y-4">
                                     <div>
@@ -1581,8 +1667,8 @@ const TeacherDashboard = () => {
                 {/* Teacher Reschedule Modal */}
                 {
                     rescheduleTarget && (
-                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setRescheduleTarget(null)}>
-                            <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setRescheduleTarget(null)}>
+                            <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                                 <h3 className="text-xl font-bold text-gray-900 mb-1">Reschedule Lesson</h3>
                                 <p className="text-sm text-gray-500 mb-4">Propose a new time for {rescheduleTarget.student}.</p>
 
@@ -1644,8 +1730,8 @@ const TeacherDashboard = () => {
                 {/* Reschedule Confirmation Modal */}
                 {
                     rescheduleConfirm && (
-                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setRescheduleConfirm(null)}>
-                            <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full animate-in zoom-in-95 text-center max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setRescheduleConfirm(null)}>
+                            <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full animate-in zoom-in-95 text-center" onClick={e => e.stopPropagation()}>
                                 <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${rescheduleConfirm.action === 'approve' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
                                     {rescheduleConfirm.action === 'approve' ? <CheckCircle size={32} /> : <AlertCircle size={32} />}
                                 </div>
@@ -1670,7 +1756,6 @@ const TeacherDashboard = () => {
                         </div>
                     )
                 }
-
             </div>
         </div>
     );

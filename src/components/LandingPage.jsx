@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import CryptoJS from 'crypto-js';
 import profilePic from '../assets/profile.jpg'; // Import profile picture
+import { emailService } from '../utils/email';
 
 const LandingPage = () => {
     const navigate = useNavigate();
@@ -94,6 +95,7 @@ const LandingPage = () => {
                     </div>
                     <div className="hidden md:flex items-center gap-8 font-medium text-gray-600">
                         <button onClick={() => scrollToSection('about')} className="hover:text-purple-600 transition-colors">About</button>
+                        <button onClick={() => scrollToSection('reviews')} className="hover:text-purple-600 transition-colors">Reviews</button>
                         <button onClick={() => scrollToSection('booking')} className="hover:text-purple-600 transition-colors">Book</button>
                         <button onClick={() => scrollToSection('faq')} className="hover:text-purple-600 transition-colors">FAQ</button>
                     </div>
@@ -286,7 +288,7 @@ const LandingPage = () => {
             </section>
 
             {/* Reviews Section */}
-            <section className="py-20 px-6 bg-white overflow-hidden">
+            <section id="reviews" className="py-20 px-6 bg-white overflow-hidden">
                 <div className="max-w-6xl mx-auto">
                     <div className="text-center mb-16 relative">
                         <h2 className="text-sm font-bold text-teal-500 uppercase tracking-widest mb-2">Success Stories</h2>
@@ -417,8 +419,9 @@ const LandingPage = () => {
                         <h4 className="text-white font-bold mb-4">Quick Links</h4>
                         <ul className="space-y-2 text-sm">
                             <li><button onClick={() => scrollToSection('about')} className="hover:text-purple-400">About Me</button></li>
-                            <li><button onClick={() => scrollToSection('faq')} className="hover:text-purple-400">FAQ</button></li>
+                            <li><button onClick={() => scrollToSection('reviews')} className="hover:text-purple-400">Reviews</button></li>
                             <li><button onClick={() => scrollToSection('booking')} className="hover:text-purple-400">Book Session</button></li>
+                            <li><button onClick={() => scrollToSection('faq')} className="hover:text-purple-400">FAQ</button></li>
                         </ul>
                     </div>
                     <div>
@@ -440,8 +443,8 @@ const LandingPage = () => {
 
             {/* Login Modal */}
             {showLoginModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowLoginModal(false)}>
-                    <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 relative animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setShowLoginModal(false)}>
+                    <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 relative animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
                         <button
                             onClick={() => setShowLoginModal(false)}
                             className="absolute top-4 right-4 p-2 text-gray-400 hover:bg-gray-100 rounded-full transition-colors"
@@ -488,8 +491,8 @@ const LandingPage = () => {
 
             {/* Student Booking Modal (Auth Split) */}
             {showStudentBookingModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowStudentBookingModal(false)}>
-                    <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 relative animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setShowStudentBookingModal(false)}>
+                    <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 relative animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
                         <button
                             onClick={() => setShowStudentBookingModal(false)}
                             className="absolute top-4 right-4 p-2 text-gray-400 hover:bg-gray-100 rounded-full transition-colors"
@@ -657,8 +660,8 @@ const LandingPage = () => {
 
             {/* Forgot PIN Modal */}
             {showForgotPinModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowForgotPinModal(false)}>
-                    <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 relative max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setShowForgotPinModal(false)}>
+                    <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 relative" onClick={e => e.stopPropagation()}>
                         <button
                             onClick={() => setShowForgotPinModal(false)}
                             className="absolute top-4 right-4 p-2 text-gray-400 hover:bg-gray-100 rounded-full transition-colors"
@@ -734,8 +737,8 @@ const LandingPage = () => {
 
             {/* Notification Modal */}
             {notification && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4" onClick={() => setNotification(null)}>
-                    <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 text-center max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setNotification(null)}>
+                    <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full animate-in zoom-in-95 text-center" onClick={e => e.stopPropagation()}>
                         <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${notification.type === 'error' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
                             {notification.type === 'error' ? <X size={24} /> : <CheckCircle size={24} />}
                         </div>
@@ -784,6 +787,7 @@ const BookingGrid = () => {
         const loadSlots = () => {
             const schedule = JSON.parse(localStorage.getItem('tutor_weekly_schedule')) || defaultSchedule;
             const manualSlots = JSON.parse(localStorage.getItem('tutor_slots')) || [];
+            const manualLessonSlots = JSON.parse(localStorage.getItem('tutor_lesson_slots')) || [];
             const bookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
 
             const generated = [];
@@ -827,7 +831,7 @@ const BookingGrid = () => {
                 }
             }
 
-            // 2. Add Manual Slots
+            // 2. Add Manual 15m Slots
             manualSlots.forEach(slot => {
                 const slotId = `${slot.date}-${slot.time}`;
                 if (!generated.some(g => g.id === slotId) && !slot.bookedBy && new Date(slot.date + 'T' + slot.time) > new Date()) {
@@ -835,30 +839,44 @@ const BookingGrid = () => {
                 }
             });
 
-            // 3. Filter Booked Slots & Check for Overlaps
-            // A lesson blocks 4 x 15min slots. A consultation blocks 1 x 15min slot.
-            const finalSlots = generated.filter(slot => {
-                // Check exact match (Consultation booking)
-                const exactMatch = bookings.find(b => b.date === slot.date && b.time === slot.time);
-                if (exactMatch) return false;
+            // 2b. Add Manual 1-Hour Lesson Slots (Treat as 4 x 15min slots for landing grid)
+            manualLessonSlots.forEach(slot => {
+                const dateStr = slot.date;
+                const timeStr = slot.time;
+                let current = new Date(dateStr + 'T' + timeStr);
 
-                // Check for overlapping Lesson booking (which lasts 60 mins)
-                // If a lesson is booked at 10:00, it blocks 10:00, 10:15, 10:30, 10:45
-                const overlappingLesson = bookings.find(b => {
-                    if (b.type !== 'lesson' && !b.student) return false; // Assume 'student' field implies paid lesson if type missing
+                // If the slot is already booked in lessonSlots metadata, we skip adding it here (handled by bookings filter later anyway, but cleaner)
+                if (slot.bookedBy) return;
+
+                for (let i = 0; i < 4; i++) {
+                    const t = current.toTimeString().slice(0, 5);
+                    const slotId = `${dateStr}-${t}`;
+                    if (!generated.some(g => g.id === slotId) && current > new Date()) {
+                        generated.push({ id: slotId, date: dateStr, time: t, type: 'manual-lesson' });
+                    }
+                    current.setMinutes(current.getMinutes() + 15);
+                }
+            });
+
+            // 3. Filter Booked Slots & Check for Overlaps
+            const activeBookings = bookings.filter(b => b.status !== 'cancelled');
+
+            const finalSlots = generated.filter(slot => {
+                const slotTime = new Date(`${slot.date}T${slot.time}`);
+
+                // Check for ANY booking that overlaps with this 15-min slot
+                const overlap = activeBookings.find(b => {
                     if (b.date !== slot.date) return false;
 
-                    const lessonTime = new Date(`${b.date}T${b.time}`);
-                    const slotTime = new Date(`${slot.date}T${slot.time}`);
-                    const lessonEnd = new Date(lessonTime.getTime() + 60 * 60000); // +1 hour
+                    const bookingStart = new Date(`${b.date}T${b.time}`);
+                    // Lessons are 60 mins, Consultations (assumed if not lesson) are 15 mins
+                    const duration = b.type === 'lesson' || b.student ? 60 : 15;
+                    const bookingEnd = new Date(bookingStart.getTime() + duration * 60000);
 
-                    // If the slot starts during the lesson
-                    return slotTime >= lessonTime && slotTime < lessonEnd;
+                    return slotTime >= bookingStart && slotTime < bookingEnd;
                 });
 
-                if (overlappingLesson) return false;
-
-                return true;
+                return !overlap;
             });
 
             setAvailableSlots(finalSlots);
@@ -913,6 +931,11 @@ const BookingGrid = () => {
 
         // Close Booking Modal
         setShowBookingModal(false);
+
+        // Send Confirmation Email (Async)
+        emailService.sendConfirmation(newBooking).catch(err => {
+            console.error('Email confirmation error:', err);
+        });
 
         // Show Confirmation Modal (Instead of Redirect)
         setConfirmationData({
@@ -997,8 +1020,8 @@ const BookingGrid = () => {
 
             {/* Booking Modal */}
             {showBookingModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowBookingModal(false)}>
-                    <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setShowBookingModal(false)}>
+                    <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                         <h2 className="text-2xl font-bold text-gray-800 mb-2">Confirm Consultation</h2>
                         <p className="text-gray-500 mb-6">Free 15-minute chat on {selectedSlot && new Date(selectedSlot.date).toLocaleDateString()} at {selectedSlot && selectedSlot.time}</p>
 
@@ -1064,8 +1087,8 @@ const BookingGrid = () => {
 
             {/* Success / Confirmation Modal */}
             {confirmationData && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setConfirmationData(null)}>
-                    <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full animate-in zoom-in-95 text-center max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setConfirmationData(null)}>
+                    <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full animate-in zoom-in-95 text-center" onClick={e => e.stopPropagation()}>
                         <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
                             <CheckCircle size={32} />
                         </div>

@@ -32,16 +32,43 @@ const Session = () => {
     const [lessonCost, setLessonCost] = useState(sessionType === 'consultation' ? 0 : 30);
     const [paymentStatus, setPaymentStatus] = useState(sessionType === 'consultation' ? 'N/A' : 'Due');
 
-    // Check for Stripe payment success
+    const [paymentVerified, setPaymentVerified] = useState(sessionType === 'consultation' || isHost);
+
+    // Initial Payment Check
     useEffect(() => {
-        // Stripe redirects back with ?payment_success=true or ?session_id=xxx
+        if (sessionType === 'consultation' || isHost) return;
+
+        const bookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
+        const currentBooking = bookings.find(b => b.id === roomId || b.id === searchParams.get('bookingId'));
+
+        if (currentBooking && currentBooking.paymentStatus === 'Paid') {
+            setPaymentVerified(true);
+        } else {
+            setPaymentVerified(false);
+        }
+    }, [roomId, sessionType, isHost, searchParams]);
+
+    // Check for Stripe payment success redirect
+    useEffect(() => {
         if (searchParams.get('payment_success') === 'true' || searchParams.get('session_id')) {
             setPaymentStatus('Paid');
+            setPaymentVerified(true);
+
+            // Also update the booking in localStorage for future joins
+            const bookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
+            const updatedBookings = bookings.map(b => {
+                if (b.id === roomId || b.id === searchParams.get('bookingId')) {
+                    return { ...b, paymentStatus: 'Paid' };
+                }
+                return b;
+            });
+            localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+            window.dispatchEvent(new Event('storage'));
+
             alert('Payment received! ✅ Check your email for confirmation from Stripe.');
-            // Clean URL
             window.history.replaceState({}, '', window.location.pathname);
         }
-    }, [searchParams]);
+    }, [searchParams, roomId]);
 
     const handleEndLesson = () => {
         setShowEndConfirm(true);
@@ -85,22 +112,57 @@ const Session = () => {
         }
     };
 
+    const paymentLink = `https://buy.stripe.com/test_528e_demo`; // This should ideally be dynamic or fetched
+
     return (
         <div className="relative w-screen h-screen overflow-hidden bg-brand-light">
-            <Whiteboard
-                connection={connection}
-                isHost={isHost}
-                sessionId={roomId}
-                studentName={displayName}
-                onEndLesson={handleEndLesson}
-            />
-            <VideoChat
-                roomId={roomId}
-                isStudent={isStudent}
-                isHost={isHost}
-                onConnection={setConnection}
-            />
-            <Chat connection={connection} isStudent={isStudent} />
+            {paymentVerified ? (
+                <>
+                    <Whiteboard
+                        connection={connection}
+                        isHost={isHost}
+                        sessionId={roomId}
+                        studentName={displayName}
+                        onEndLesson={handleEndLesson}
+                    />
+                    <VideoChat
+                        roomId={roomId}
+                        isStudent={isStudent}
+                        isHost={isHost}
+                        onConnection={setConnection}
+                    />
+                    <Chat connection={connection} isStudent={isStudent} />
+                </>
+            ) : (
+                <div className="fixed inset-0 z-[200] bg-gray-900 flex items-center justify-center p-6 text-center">
+                    <div className="bg-white p-10 rounded-3xl shadow-2xl max-w-md w-full animate-in zoom-in-95">
+                        <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                            <CreditCard size={40} />
+                        </div>
+                        <h2 className="text-2xl font-bold text-gray-900 mb-2">Payment Required</h2>
+                        <p className="text-gray-500 mb-8">Access to the interactive whiteboard and video feed is locked until payment is confirmed for this session.</p>
+
+                        <div className="space-y-4">
+                            <a
+                                href={paymentLink}
+                                className="block w-full py-4 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold shadow-lg transition-all"
+                            >
+                                Pay for Lesson (£30)
+                            </a>
+                            <button
+                                onClick={() => navigate(-1)}
+                                className="block w-full py-3 text-gray-500 font-bold hover:text-gray-700 transition-colors"
+                            >
+                                Go Back
+                            </button>
+                        </div>
+
+                        <div className="mt-8 pt-6 border-t border-gray-100 flex items-center justify-center gap-2 text-xs text-gray-400">
+                            <Shield size={14} /> Secure Payment via Stripe
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* End Lesson Button (Host Only) - Handled in Whiteboard Header now */}
 
