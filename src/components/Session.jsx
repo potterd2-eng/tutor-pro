@@ -30,6 +30,7 @@ const Session = () => {
     const [lessonTopic, setLessonTopic] = useState('');
     const [feedbackWell, setFeedbackWell] = useState('');
     const [feedbackImprove, setFeedbackImprove] = useState('');
+    const [feedbackFocus, setFeedbackFocus] = useState('');
     const [nextSteps, setNextSteps] = useState('');
     const [lessonCost, setLessonCost] = useState(sessionType === 'consultation' ? 0 : 30);
     const [paymentStatus, setPaymentStatus] = useState(sessionType === 'consultation' ? 'N/A' : 'Due');
@@ -61,8 +62,11 @@ const Session = () => {
             setStrictBlock(true);
         }
 
-        if (currentBooking && currentBooking.paymentStatus === 'Paid') {
+        if (currentBooking && (currentBooking.paymentStatus === 'Paid' || currentBooking.paymentStatus === 'Due (Exception)')) {
             setPaymentVerified(true);
+            if (currentBooking.paymentStatus === 'Due (Exception)') {
+                setPaymentStatus('Due (Exception)');
+            }
         } else {
             setPaymentVerified(false);
         }
@@ -98,6 +102,14 @@ const Session = () => {
 
     const requestException = () => {
         if (window.confirm("Request Exception: strictly valid for this session only.\n\nBy clicking OK, you agree to make the payment immediately after the lesson.")) {
+            // Persist the exception in the booking
+            const bookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
+            const updatedBookings = bookings.map(b =>
+                (b.id === roomId || b.id === searchParams.get('bookingId')) ? { ...b, paymentStatus: 'Due (Exception)' } : b
+            );
+            localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+            window.dispatchEvent(new Event('storage'));
+
             setPaymentVerified(true);
             setPaymentStatus('Due (Exception)');
         }
@@ -107,17 +119,27 @@ const Session = () => {
         // ... (existing feedback submission logic)
         e.preventDefault();
 
+        // Create consolidated feedback for display
+        const consolidatedFeedback = `${feedbackWell} ${feedbackImprove ? '| To Improve: ' + feedbackImprove : ''} ${feedbackFocus ? '| Focus: ' + feedbackFocus : ''}`.trim();
+
         const sessionLog = {
             id: Date.now().toString(),
             date: new Date().toISOString(),
+            endTime: new Date().toISOString(),
             studentName: displayName,
+            studentId: searchParams.get('studentId') || displayName.toLowerCase().replace(/\s+/g, '_'),
+            subject: lessonTopic,
             topic: lessonTopic,
+            feedback: consolidatedFeedback, // For parent dashboard
             feedback_well: feedbackWell,
             feedback_improve: feedbackImprove,
+            feedback_focus: feedbackFocus,
             next_steps: nextSteps,
+            nextSteps: nextSteps, // For teacher dashboard
             cost: lessonCost,
             paymentStatus: paymentStatus,
-            type: sessionType
+            type: sessionType,
+            duration: '60' // Default 60 mins
         };
 
         // Save to History
@@ -129,6 +151,9 @@ const Session = () => {
         const bookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
         const updatedBookings = bookings.filter(b => b.id !== roomId);
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+
+        // Dispatch event so other components know data changed
+        window.dispatchEvent(new Event('storage'));
 
         // Close connection
         if (connection) connection.close();
@@ -260,9 +285,15 @@ const Session = () => {
                                     <textarea required value={feedbackImprove} onChange={e => setFeedbackImprove(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-amber-500 outline-none h-24 text-sm" placeholder="Practice more..." />
                                 </div>
                             </div>
-                            <div>
-                                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Next Lesson</label>
-                                <textarea value={nextSteps} onChange={e => setNextSteps(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-purple-500 outline-none h-24" placeholder="E.g. Focus on quadratic equations" />
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Focus</label>
+                                    <textarea value={feedbackFocus} onChange={e => setFeedbackFocus(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-blue-500 outline-none h-24 text-sm" placeholder="Key topics focused on..." />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Homework/Next Steps</label>
+                                    <textarea value={nextSteps} onChange={e => setNextSteps(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-purple-500 outline-none h-24 text-sm" placeholder="E.g. Focus on quadratic equations" />
+                                </div>
                             </div>
 
                             <button type="submit" className="w-full py-4 bg-purple-600 text-white rounded-xl font-bold shadow-lg hover:bg-purple-700 mt-6">

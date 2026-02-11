@@ -7,6 +7,13 @@ const StudentLogin = () => {
     const [searchParams] = useSearchParams();
     const joinId = searchParams.get('join'); // If redirected from an invite link
 
+    const formatName = (str) => {
+        if (!str) return '';
+        return str.split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+            .join(' ');
+    };
+
     const [name, setName] = useState('');
     const [sessionId, setSessionId] = useState(joinId || '');
 
@@ -18,7 +25,7 @@ const StudentLogin = () => {
         const cleanId = sessionId.trim().split('/').pop().replace('?host=true', '');
 
         // Navigate to session
-        navigate(`/session/${cleanId}?student=${encodeURIComponent(name.trim())}`);
+        navigate(`/session/${cleanId}?student=${encodeURIComponent(formatName(name.trim()))}`);
     };
 
     return (
@@ -69,7 +76,7 @@ const StudentLogin = () => {
                         type="button"
                         onClick={() => {
                             if (name.trim()) {
-                                navigate(`/student-dashboard?student=${encodeURIComponent(name.trim())}`);
+                                navigate(`/student-dashboard?student=${encodeURIComponent(formatName(name.trim()))}`);
                             } else {
                                 alert("Please enter your name first.");
                             }

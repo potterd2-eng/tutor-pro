@@ -84,7 +84,8 @@ Davina Potter`;
                 subject: bookingData.subject,
                 date: bookingData.date,
                 time: bookingData.time,
-                booking_type: bookingData.bookingFor === 'parent' ? 'Parent' : 'Student',
+                booking_type: bookingData.bookingFor === 'parent' ? 'Parent Booking' : 'Student Booking',
+                booking_role: bookingData.bookingFor === 'parent' ? 'Parent' : 'Student', // Explicit role
                 to_email: TEACHER_EMAIL
             }, EMAILJS_PUBLIC_KEY);
         } catch (error) {
@@ -113,6 +114,17 @@ Please login to your dashboard to Approve or Deny this request.
 Best,
 Davina Potter`;
                 return await this._sendStudentEmail(bookingData.student, bookingData.email, subjectLine, messageBody);
+            } else if (fromType === 'student') {
+                // Notify Teacher
+                if (!EMAILJS_PUBLIC_KEY) return;
+                return await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEACHER_TEMPLATE_ID, {
+                    student_name: bookingData.student,
+                    subject: `RESCHEDULE REQUEST: ${bookingData.subject}`,
+                    date: bookingData.requestedDate,
+                    time: bookingData.requestedTime,
+                    booking_type: 'Reschedule Request',
+                    to_email: TEACHER_EMAIL
+                }, EMAILJS_PUBLIC_KEY);
             }
         } catch (error) {
             console.error('Failed to send reschedule request:', error);
@@ -135,9 +147,33 @@ New Lesson Time:
 
 Best,
 Davina`;
-            return await this._sendStudentEmail(bookingData.student, bookingData.email, subjectLine, messageBody);
+            await this._sendStudentEmail(bookingData.student, bookingData.email, subjectLine, messageBody);
+
+            // Also notify teacher if student responded or teacher approved
+            if (response === 'Accepted' || response === 'Declined' || response === 'Approved') {
+                await this.sendRescheduleResponseToTeacher(bookingData, response);
+            }
         } catch (error) {
             console.error('Failed to send reschedule response:', error);
+        }
+    },
+
+    /**
+     * Notify teacher that a student has responded to a reschedule request
+     */
+    async sendRescheduleResponseToTeacher(bookingData, response) {
+        try {
+            if (!EMAILJS_PUBLIC_KEY) return;
+            await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEACHER_TEMPLATE_ID, {
+                student_name: bookingData.student,
+                subject: `RESCHEDULE ${response.toUpperCase()}: ${bookingData.subject}`,
+                date: bookingData.date,
+                time: bookingData.time,
+                booking_type: `Reschedule ${response}`,
+                to_email: TEACHER_EMAIL
+            }, EMAILJS_PUBLIC_KEY);
+        } catch (error) {
+            console.error('Failed to notify teacher of reschedule response:', error);
         }
     },
 
@@ -157,6 +193,17 @@ Topic: ${bookingData.subject}
 If this was a paid lesson, any applicable refunds will be processed shortly.`;
 
                 return await this._sendStudentEmail(bookingData.student, bookingData.email, subjectLine, messageBody);
+            } else if (cancelledBy === 'student') {
+                // Notify Teacher
+                if (!EMAILJS_PUBLIC_KEY) return;
+                return await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEACHER_TEMPLATE_ID, {
+                    student_name: bookingData.student,
+                    subject: `LESSON CANCELLED: ${bookingData.subject}`,
+                    date: bookingData.date,
+                    time: bookingData.time,
+                    booking_type: 'Cancellation',
+                    to_email: TEACHER_EMAIL
+                }, EMAILJS_PUBLIC_KEY);
             }
         } catch (error) {
             console.error('Failed to send cancellation email:', error);
@@ -234,6 +281,51 @@ Davina`;
             }, EMAILJS_PUBLIC_KEY);
         } catch (error) {
             console.error('Failed to send payment override notification:', error);
+        }
+    },
+
+    /**
+     * Send notification for a new message
+     */
+    async sendMessageNotification(fromName, toEmail, messagePreview) {
+        try {
+            if (!EMAILJS_PUBLIC_KEY) return;
+
+            const subjectLine = `New Message from ${fromName}`;
+            const messageBody = `Hi,
+
+You have a new message from ${fromName}:
+
+"${messagePreview}"
+
+Please login to your dashboard to reply.
+
+Best,
+TutorPro System`;
+
+            await this._sendStudentEmail('TutorPro User', toEmail, subjectLine, messageBody);
+        } catch (error) {
+            console.error('Failed to send message notification:', error);
+        }
+    },
+
+    /**
+     * Notify teacher of a new booking (Individual or Recurring)
+     */
+    async sendNewBookingNotificationToTeacher(bookingData) {
+        try {
+            if (!EMAILJS_PUBLIC_KEY) return;
+            await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEACHER_TEMPLATE_ID, {
+                student_name: bookingData.student,
+                student_email: bookingData.email,
+                subject: `NEW BOOKING: ${bookingData.subject}`,
+                date: bookingData.date,
+                time: bookingData.time,
+                booking_type: bookingData.recurringId ? 'Recurring' : 'Individual',
+                to_email: TEACHER_EMAIL
+            }, EMAILJS_PUBLIC_KEY);
+        } catch (error) {
+            console.error('Failed to notify teacher of new booking:', error);
         }
     }
 };

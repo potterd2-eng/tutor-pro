@@ -3,6 +3,7 @@ import LandingPage from './components/LandingPage';
 import TeacherDashboard from './components/TeacherDashboard';
 import StudentLogin from './components/StudentLogin';
 import StudentDashboard from './components/StudentDashboard';
+import ParentDashboard from './components/ParentDashboard';
 import Session from './components/Session';
 import PrivacyPolicy from './components/PrivacyPolicy';
 import TermsOfService from './components/TermsOfService';
@@ -19,6 +20,7 @@ function App() {
         <Route path="/student-login" element={<StudentLogin />} />
         <Route path="/student/:studentName" element={<StudentDashboard />} />
         <Route path="/student-dashboard" element={<StudentDashboard />} />
+        <Route path="/parent/:parentEmail" element={<ParentDashboard />} />
         <Route path="/session/:roomId" element={<Session />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="/terms" element={<TermsOfService />} />

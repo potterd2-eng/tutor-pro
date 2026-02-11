@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
     Clock, Calendar, Video, MessageSquare, Star,
     CheckCircle, AlertCircle, TrendingUp, CreditCard,
-    FileText, ChevronRight, LogOut, Plus, ArrowRight, X, Trash2
+    FileText, ChevronRight, LogOut, Plus, ArrowRight, X, Trash2, BookOpen
 } from 'lucide-react';
 import { emailService } from '../utils/email';
 import { generateGoogleCalendarUrl } from '../utils/calendar';
@@ -17,19 +17,18 @@ const StudentDashboard = () => {
     const [history, setHistory] = useState([]);
     const [bookings, setBookings] = useState([]);
     const [availableLessons, setAvailableLessons] = useState([]);
-    const [activeTab, setActiveTab] = useState('overview'); // 'overview', 'booking', 'invoices', 'profile'
+    const [activeTab, setActiveTab] = useState('overview');
     const [showBookingModal, setShowBookingModal] = useState(false);
-    const [selectedSlot, setSelectedSlot] = useState(null);
     const [bookingSubject, setBookingSubject] = useState('');
-    const [rescheduleTarget, setRescheduleTarget] = useState(null); // The booking being rescheduled
-    const [showRescheduleModal, setShowRescheduleModal] = useState(false); // Modal state
-    const [bookTenWeeks, setBookTenWeeks] = useState(false); // Bulk booking togglestate
-    const [expandedBlockId, setExpandedBlockId] = useState(null); // For showing details of block bookings
+    const [isRecurring, setIsRecurring] = useState(false);
+    const [selectedSlot, setSelectedSlot] = useState(null);
+    const [rescheduleTarget, setRescheduleTarget] = useState(null);
+    const [showRescheduleModal, setShowRescheduleModal] = useState(false);
+    const [bookTenWeeks, setBookTenWeeks] = useState(false);
+    const [expandedBlockId, setExpandedBlockId] = useState(null);
 
     const [showReviewModal, setShowReviewModal] = useState(false);
-    const [showNoteModal, setShowNoteModal] = useState(false);
     const [editNoteTarget, setEditNoteTarget] = useState(null);
-    const [selectedBooking, setSelectedBooking] = useState(null);
     const [dismissedCancelledBanner, setDismissedCancelledBanner] = useState(() => {
         return localStorage.getItem('dismissed_cancelled_banner') === 'true';
     });
@@ -37,6 +36,7 @@ const StudentDashboard = () => {
     const [receiptTarget, setReceiptTarget] = useState(null);
     const [notification, setNotification] = useState(null);
     const [chatMessages, setChatMessages] = useState([]);
+    const [hourlyRate, setHourlyRate] = useState(30);
     const [newMessage, setNewMessage] = useState('');
 
     // Review System State
@@ -46,23 +46,26 @@ const StudentDashboard = () => {
     const [confirmation, setConfirmation] = useState(null);
     const [cancelTarget, setCancelTarget] = useState(null);
 
-    // Payment Processing State
-    const [isProcessingPayment, setIsProcessingPayment] = useState(false);
-
     useEffect(() => {
-        // Load data
         const loadData = () => {
             const allHistory = JSON.parse(localStorage.getItem('tutor_session_history')) || [];
-            // Filter history for this student (fuzzy match for now or show all if name is generic)
             const myHistory = allHistory.filter(h =>
-                h.studentName.toLowerCase().includes(studentName.toLowerCase()) ||
-                studentName.toLowerCase().includes(h.studentName.toLowerCase())
+                (h.studentName && h.studentName.toLowerCase().includes(studentName.toLowerCase())) ||
+                (h.student && h.student.toLowerCase().includes(studentName.toLowerCase()))
             );
-            setHistory(myHistory.reverse()); // Newest first
+            setHistory(myHistory.sort((a, b) => new Date(b.date + 'T' + b.time) - new Date(a.date + 'T' + a.time)));
 
             const allStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
             const myProfile = allStudents.find(s => s.name.toLowerCase() === displayName.toLowerCase());
-            if (myProfile) setStudentId(myProfile.id);
+            if (myProfile) {
+                setStudentId(myProfile.id);
+                // Determine rate based on subject
+                const subject = myProfile.subject || '';
+                if (subject.includes('KS3')) setHourlyRate(25);
+                else if (subject.includes('GCSE')) setHourlyRate(30);
+                else if (subject.includes('A-Level')) setHourlyRate(40);
+                else setHourlyRate(30);
+            }
 
             const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
             const myBookings = allBookings.filter(b =>
@@ -70,145 +73,11 @@ const StudentDashboard = () => {
             );
             setBookings(myBookings.sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time)));
 
-            // Load chat messages using same structure as teacher dashboard
             const messages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
             setChatMessages(messages[studentName] || []);
 
-            // Load ALL lesson slots (manual + generated from teacher's weekly schedule)
             const allLessonSlots = JSON.parse(localStorage.getItem('tutor_all_lesson_slots')) || [];
-
-            // Filter and Process available slots
-            const available = [];
-
-            allLessonSlots.forEach(l => {
-                // 1. Basic Checks
-                if (l.bookedBy) return;
-                const slotStart = new Date(l.date + 'T' + l.time);
-                if (slotStart <= new Date()) return;
-
-                // 2. Check overlap for standard 1-hour slot
-                const slotEnd = new Date(slotStart.getTime() + 60 * 60000);
-
-                const getOverlap = (start, end) => {
-                    return allBookings.find(b => {
-                        const bStart = new Date(`${b.date}T${b.time} `);
-                        // Consultation is 15m, Lesson is 60m. 
-                        // If b.type is missing, assume it's a lesson (60m) unless we check duration (not stored currently).
-                        // BUT: We know manual bookings from LandingPage (15m) and Dashboard (60m).
-                        // For safety, let's assume blocking is point-based or we'd need duration. 
-                        // Actually, logic in LandingPage treats LandingPage bookings as 15m (implicit).
-                        // Let's assume bookings with 'type'='consultation' (or from landing page) are 15m.
-                        // Since we don't strictly store Type everywhere, let's check exact times.
-
-                        // Simply: Does the booking *start* inside our window?
-                        // Or does our window *start* inside the booking?
-                        // We need to know booking duration. 
-                        // Existing logic assumed blocking if start times clashed.
-
-                        // Let's refine:
-                        // If it's a "Lesson" booking (from Student Dash), it blocks 60m.
-                        // If it's a "Consultation" booking (from Landing Page), it blocks 15m.
-                        // We can heuristics: if 'student' field exists and no 'type', it's likely a paid lesson? 
-                        // Actually, LandingPage bookings have 'student' too.
-                        // However, LandingPage bookings usually have `type: 'consultation'` in newer logic? 
-                        // Let's check LandingPage.jsx booking creation... It doesn't explicitly save 'type' in previous versions.
-                        // But recent changes might have added it? No.
-                        // SAFE BET: If the booking ID starts with 'consult-', it's a consultation. 
-                        // Or we can check if the booking time is X:15, X:45 - likely consultation.
-
-                        // Let's stick to strict time collision:
-                        // We will assume any booking blocks at least 15 mins.
-                        // If a booking is AT X:00, it might be 15m or 60m.
-
-                        // For the purpose of "Shifting":
-                        // We only care if the X:00 slot is blocked by something starting at X:00.
-                        return bStart >= start && bStart < end;
-                    });
-                };
-
-                const blocker = getOverlap(slotStart, slotEnd);
-
-                if (!blocker) {
-                    available.push(l);
-                } else {
-                    // 3. Smart Shifting Logic
-                    // If blocked, check if we can start 15 mins later?
-                    // Only try this if the blocker starts EXACTLY at the slot start (impacting the first 15m).
-                    const blockerTime = new Date(`${blocker.date}T${blocker.time} `);
-
-                    if (blockerTime.getTime() === slotStart.getTime()) {
-                        // It's blocked at the start.
-                        // Try shifting to X:15
-                        const shiftedStart = new Date(slotStart.getTime() + 15 * 60000);
-                        const shiftedEnd = new Date(shiftedStart.getTime() + 60 * 60000); // 1 hour duration
-
-                        // Check if this NEW window is free
-                        // We need to check against ALL bookings
-                        const shiftedBlocker = allBookings.find(b => {
-                            const bStart = new Date(`${b.date}T${b.time} `);
-                            // Check if booking falls in our new window
-                            const isInsideUpdatedWindow = bStart >= shiftedStart && bStart < shiftedEnd;
-
-                            // ALSO check if a PREVIOUS booking runs into our new window
-                            // e.g. a lesson starting at X-45 (ending at X+15) would block us.
-                            // But we simplify: assume standard grid slots for lessons (X:00).
-
-                            // Crucial: Check if the blocker at X:00 was actually a LESSON (60m).
-                            // If X:00 is a 60m lesson, it ends at X+60. It would block X:15 too.
-                            // If X:00 is a 15m consultation, it ends at X:15. It allows X:15 start.
-
-                            // Heuristic: If existing booking is at X:00, how do we know if it's 15m or 60m?
-                            // If it's in 'tutor_bookings', we can check if it corresponds to a 'tutor_all_lesson_slots' entry?
-                            // No, because bookings are copies.
-
-                            // Strategy: Consultations are usually free/unconfirmed? No, they are confirmed bookings.
-                            // Let's assume if it blocks X:00, we *try* X:15.
-                            // If X:15 is blocked (by the same meeting extending, or another meeting), we fail.
-
-                            // If X:00 meeting is 60 mins: it covers X:00-X:60.
-                            // Our X:15 start needs X:15-X:75.
-                            // Overlap!
-
-                            // So we explicitly need to know if the X:00 booking is SHORT.
-                            // We can check `booking.type === 'consultation'`?
-                            // Or just check if X:15 is explicitly booked? No, that doesn't tell us if X:00 is long.
-
-                            return isInsideUpdatedWindow;
-                        });
-
-                        // If the X:00 booking was a long lesson, it technically occupies X:15, X:30 etc.
-                        // But our 'allBookings' array only stores START times.
-                        // checks: [ {time: '10:00'} ]
-                        // changing to [ {time: '10:15'} ] won't collide with '10:00' in simple array search?
-
-                        // We need DURATION.
-                        // Since we lack robust duration data, let's use the USER'S context:
-                        // "beginning the lesson after the 15 min consultation"
-                        // This implies the user knows they have 15m slots.
-
-                        // We'll trust the user and allow the shift, identifying the slot as special.
-                        // BUT to be safe, we should ensure no booking starts at X:15, X:30, X:45, X+1:00.
-
-                        const hasLaterConflict = allBookings.some(b => {
-                            const bTime = new Date(`${b.date}T${b.time} `);
-                            return bTime >= shiftedStart && bTime < shiftedEnd;
-                        });
-
-                        if (!hasLaterConflict) {
-                            // Create a shifted slot
-                            // Ensure we don't output duplicate IDs for the same original slot
-                            const timeStr = shiftedStart.toTimeString().slice(0, 5);
-                            available.push({
-                                ...l,
-                                id: l.id + '-shifted',
-                                time: timeStr,
-                                isShifted: true // Optional UI indicator
-                            });
-                        }
-                    }
-                }
-            });
-
+            const available = allLessonSlots.filter(l => !l.bookedBy && new Date(l.date + 'T' + l.time) > new Date());
             setAvailableLessons(available.sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time)));
         };
 
@@ -217,7 +86,6 @@ const StudentDashboard = () => {
         return () => window.removeEventListener('storage', loadData);
     }, [studentName, displayName]);
 
-    // Mark messages as read when the messages tab is active
     useEffect(() => {
         if (activeTab === 'messages' && studentName) {
             const messages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
@@ -229,8 +97,6 @@ const StudentDashboard = () => {
                     m.sender === 'Davina' ? { ...m, read: true } : m
                 );
                 const updatedMessages = { ...messages, [studentName]: updatedThread };
-
-                // Update state and localStorage
                 localStorage.setItem('chat_messages_v2', JSON.stringify(updatedMessages));
                 setChatMessages(updatedThread);
                 window.dispatchEvent(new Event('storage'));
@@ -238,50 +104,54 @@ const StudentDashboard = () => {
         }
     }, [activeTab, studentName]);
 
-    const handleJoinLesson = (roomId) => {
-        navigate(`/session/${roomId}?student=${encodeURIComponent(studentName)}`);
+    const handleJoinLesson = (booking) => {
+        if (booking.paymentStatus?.toLowerCase() !== 'paid') {
+            setNotification({ type: 'error', message: 'Please pay for this lesson before starting. You can pay in the Invoices tab.' });
+            setActiveTab('invoices');
+            return;
+        }
+        navigate(`/session/${booking.id}?student=${encodeURIComponent(studentName)}`);
+    };
+
+    const handleApproval = (lesson) => {
+        const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
+        const updatedBookings = allBookings.map(b => {
+            if (lesson.recurringId && b.recurringId === lesson.recurringId) {
+                return { ...b, status: 'confirmed' };
+            }
+            if (b.id === lesson.id) {
+                return { ...b, status: 'confirmed' };
+            }
+            return b;
+        });
+        localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+        window.dispatchEvent(new Event('storage'));
+        setNotification({ type: 'success', message: 'Lesson(s) approved and confirmed!' });
+    };
+
+    const handleDenial = (lesson) => {
+        if (!window.confirm('Are you sure you want to deny this lesson proposal?')) return;
+        const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
+        const updatedBookings = allBookings.map(b => {
+            if (lesson.recurringId && b.recurringId === lesson.recurringId) {
+                return { ...b, status: 'cancelled' };
+            }
+            if (b.id === lesson.id) {
+                return { ...b, status: 'cancelled' };
+            }
+            return b;
+        });
+        localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+        window.dispatchEvent(new Event('storage'));
+        setNotification({ type: 'info', message: 'Lesson proposal denied.' });
     };
 
     const handlePay = (invoice) => {
         setPaymentTarget(invoice);
     };
 
-    const processPayment = (e) => {
-        e.preventDefault();
-        setIsProcessingPayment(true);
-        // Simulate API call
-        setTimeout(() => {
-            setIsProcessingPayment(false);
-            markAsPaid(paymentTarget.id);
-            setNotification({ type: 'success', message: "Payment Successful! Receipt sent to email." });
-
-            // Send Receipt Email
-            // We need student email. We can try to get it from 'paymentTarget' if available, or 'student' profile. 
-            // The paymentTarget comes from 'invoice', which might be from 'bookings' or 'history'.
-            // They usually have 'email' if they are bookings.
-            // If not, we might need to look up the student profile.
-            // For now, let's assume it's on the object or we use a fallback log.
-            // Actually, we can get current student profile from localStorage if needed.
-            const allStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
-            const studentProfile = allStudents.find(s => s.name === displayName);
-
-            const emailToSendTo = paymentTarget.email || (studentProfile ? studentProfile.email : '');
-
-            if (emailToSendTo) {
-                emailService.sendReceipt({
-                    ...paymentTarget,
-                    studentName: displayName,
-                    email: emailToSendTo
-                });
-            }
-
-            setPaymentTarget(null);
-            setConfirmation(null); // Just in case
-        }, 2000);
-    };
-
     const handleSaveNote = (e) => {
-        e.preventDefault();
+        if (e) e.preventDefault();
         if (!editNoteTarget) return;
 
         const updated = bookings.map(b =>
@@ -293,159 +163,42 @@ const StudentDashboard = () => {
         setEditNoteTarget(null);
     };
 
-    const markBlockAsPaid = (currentInvoiceId) => {
-        // Find current invoice and next 9 unpaid lessons
-        const allHistory = JSON.parse(localStorage.getItem('tutor_session_history')) || [];
-        const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
-
-        // Combine and sort by date
-        const allInvoices = [...allHistory, ...allBookings]
-            .filter(inv => inv.paymentStatus === 'Due')
-            .sort((a, b) => new Date(a.date + 'T' + (a.time || '00:00')) - new Date(b.date + 'T' + (b.time || '00:00')));
-
-        // Take first 10 (including current)
-        const toMarkIds = allInvoices.slice(0, 10).map(inv => inv.id);
-        const paymentDate = new Date().toISOString();
-
-        // Update history
-        const updatedHistory = allHistory.map(h =>
-            toMarkIds.includes(h.id) ? { ...h, paymentStatus: 'Paid', paymentDate } : h
-        );
-        localStorage.setItem('tutor_session_history', JSON.stringify(updatedHistory));
-        setHistory(prev => prev.map(h => toMarkIds.includes(h.id) ? { ...h, paymentStatus: 'Paid', paymentDate } : h));
-
-        // Update bookings
-        const updatedBookings = allBookings.map(b =>
-            toMarkIds.includes(b.id) ? { ...b, paymentStatus: 'Paid', paymentDate } : b
-        );
-        localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
-        setBookings(prev => prev.map(b => toMarkIds.includes(b.id) ? { ...b, paymentStatus: 'Paid', paymentDate } : b));
-
-        window.dispatchEvent(new Event('storage'));
-    };
-
-    const handleReceipt = (invoice) => {
-        setReceiptTarget(invoice);
-    };
-
-    const handleBankPay = (invoice) => {
-        setConfirmation({
-            message: `Securely pay £${invoice.cost} via your Bank App(Open Banking) ? `,
-            onConfirm: () => {
-                setTimeout(() => {
-                    markAsPaid(invoice.id);
-                    setNotification({ type: 'success', message: "Payment Authorized!" });
-                    setConfirmation(null);
-                }, 1000);
-            },
-            onCancel: () => setConfirmation(null)
-        });
-    };
-
     const markAsPaid = (invoiceId) => {
         const paymentDate = new Date().toISOString();
-
-        // Update HISTORY
         const allHistory = JSON.parse(localStorage.getItem('tutor_session_history') || '[]');
-        const target = allHistory.find(h => h.id === invoiceId);
-
-        // Update target and potentially other recurring ones if logic dictated (but for single pay we usually keep strict)
-        // However, if we pay for a "recurringId" linked item that implies block, usually we use markBlockAsPaid. 
-        // Here we stick to single or specific target.
-
-        const updatedHistory = allHistory.map(h => {
-            if (h.id === invoiceId) return { ...h, paymentStatus: 'Paid', paymentDate };
-            // If the paid one was a bulk payment (£280) or part of a recurring series we might want to be careful.
-            // But usually this function is for single items.
-            return h;
-        });
-
+        const updatedHistory = allHistory.map(h => h.id === invoiceId ? { ...h, paymentStatus: 'Paid', paymentDate } : h);
         localStorage.setItem('tutor_session_history', JSON.stringify(updatedHistory));
-        setHistory(updatedHistory.filter(h => h.studentId === student.id || h.student === student.name));
 
-        // Update BOOKINGS
         const allBookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
-        const updatedBookings = allBookings.map(b => {
-            if (b.id === invoiceId) return { ...b, paymentStatus: 'Paid', paymentDate };
-            return b;
-        });
+        const updatedBookings = allBookings.map(b => b.id === invoiceId ? { ...b, paymentStatus: 'Paid', paymentDate } : b);
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
-        setBookings(updatedBookings.filter(b => b.studentId === student.id || b.student === student.name));
 
         window.dispatchEvent(new Event('storage'));
     };
 
     const handleBookLesson = (slot) => {
         setSelectedSlot(slot);
-        setBookingSubject('General Tuitions'); // Pre-fill for convenience
+        // Default to student's subject or generic valid type
+        const allStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
+        const student = allStudents.find(s => s.name === displayName);
+        setBookingSubject(student?.subject || 'KS3 Maths');
+        setIsRecurring(false);
         setShowBookingModal(true);
     };
 
-    const executeBooking = (bookingsToAdd, slotsToUpdate) => {
-        const allSlots = JSON.parse(localStorage.getItem('tutor_lesson_slots')) || [];
-        const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
-
-        // Update Slots
-        let finalSlots = [...allSlots];
-        slotsToUpdate.forEach(u => {
-            const idx = finalSlots.findIndex(s => s.date === u.date && s.time === u.time);
-            if (idx >= 0) {
-                finalSlots[idx] = u;
-            } else {
-                finalSlots.push(u);
-            }
-        });
-        localStorage.setItem('tutor_lesson_slots', JSON.stringify(finalSlots));
-
-        // Add Bookings
-        const finalBookings = [...allBookings, ...bookingsToAdd];
-        localStorage.setItem('tutor_bookings', JSON.stringify(finalBookings));
-
-        setNotification({
-            type: 'success',
-            message: bookingsToAdd.length > 1
-                ? `Successfully booked ${bookingsToAdd.length} lessons!`
-                : 'Lesson Booked Successfully!'
-        });
-
-        window.dispatchEvent(new Event('storage'));
-        setShowBookingModal(false);
-        setBookingSubject('');
-        setSelectedSlot(null);
-        setRescheduleTarget(null);
-        setActiveTab('overview');
-    };
-
-
     const confirmBooking = () => {
-        // Validation for new bookings (subject required)
-        // For rescheduling, we might carry over the subject, so check if it's a new booking
         if (!rescheduleTarget && !bookingSubject.trim()) {
-            setNotification({ type: 'error', message: 'Please enter what you\'d like to cover in this lesson.' });
+            setNotification({ type: 'error', message: 'Please enter what you\'d like to cover.' });
             return;
         }
 
-        // 1. Update Lesson Slot (Mark new slot as 'booked' or 'pending'?)
-        // For simplicity in this demo, we'll mark it as booked (blocked) immediately
-        // BUT for Reschedule, user asked to "Request a change... confirm before fully booked".
-        // If we don't block it, someone else might take it.
-        // Let's block it but with a special status if possible, or just 'bookedBy' student.
-        // We'll proceed with blocking it to ensure availability.
-
         const allSlots = JSON.parse(localStorage.getItem('tutor_lesson_slots')) || [];
-        const updatedSlots = allSlots.map(s => s.id === selectedSlot.id ? { ...s, bookedBy: studentName } : s);
-
-        // If rescheduling, we should theoretically FREE the old slot? 
-        // User said: "must confirm before fully booked".
-        // Implies we hold BOTH slots? Or just the new one is 'Held'?
-        // Let's hold the new one. The old one remains booked until approved. 
-        // So we occupy 2 slots temporarily. 
+        const updatedSlots = allSlots.map(s => s.id === selectedSlot.id ? { ...s, bookedBy: displayName } : s);
         localStorage.setItem('tutor_lesson_slots', JSON.stringify(updatedSlots));
 
         const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
 
         if (rescheduleTarget) {
-            // Update EXISTING booking to 'pending_reschedule'
             const updatedBookings = allBookings.map(b => {
                 if (b.id === rescheduleTarget.id) {
                     return {
@@ -459,114 +212,52 @@ const StudentDashboard = () => {
                 return b;
             });
             localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
-            setNotification({ type: 'success', message: 'Reschedule Request Sent! Your teacher will confirm shortly.' });
 
-            // Notify Teacher
+            // Notify Tutor
             emailService.sendRescheduleRequest({
                 ...rescheduleTarget,
                 requestedDate: selectedSlot.date,
                 requestedTime: selectedSlot.time
-            }, 'student');
-
-            setShowBookingModal(false);
-            window.dispatchEvent(new Event('storage'));
-        } else {
-            if (bookTenWeeks) {
-                // Bulk Booking Logic
-                let successfulBookings = 0;
-                let conflicts = [];
-                const bookingsToAdd = [];
-                const slotsToUpdate = [];
-
-                // Loop 10 weeks
-                for (let i = 0; i < 10; i++) {
-                    const nextDate = new Date(selectedSlot.date);
-                    nextDate.setDate(nextDate.getDate() + (i * 7));
-                    const dateStr = nextDate.toISOString().split('T')[0];
-                    const timeStr = selectedSlot.time;
-
-                    // Check Conflict
-                    // We need to check if there is an existing booking OR if the slot is taken
-                    // Slot check:
-                    const existingSlot = allSlots.find(s => s.date === dateStr && s.time === timeStr);
-                    // Booking check:
-                    const existingBooking = allBookings.find(b => b.date === dateStr && b.time === timeStr);
-
-                    if ((existingSlot && existingSlot.bookedBy && existingSlot.bookedBy !== studentName) || existingBooking) {
-                        conflicts.push(`${dateStr} at ${timeStr} `);
-                    } else {
-                        // Prepare Booking
-                        bookingsToAdd.push({
-                            id: selectedSlot.id + `- wk${i} `, // Ensure unique
-                            date: dateStr,
-                            time: timeStr,
-                            student: studentName,
-                            studentId: studentId,
-                            subject: bookingSubject,
-                            type: 'lesson',
-                            bookedAt: new Date().toISOString(),
-                            status: 'confirmed',
-                            paymentStatus: 'Due',
-                            cost: 28, // Discounted rate for block booking (£280 total / 10)
-                            recurringId: i > 0 ? selectedSlot.id + '-series' : undefined // Basic linking
-                        });
-
-                        // Prepare Slot Update
-                        if (existingSlot) {
-                            slotsToUpdate.push({ ...existingSlot, bookedBy: studentName });
-                        } else {
-                            // If generated slot doesn't exist in 'lesson_slots' (it might be dynamic), we should add it?
-                            // 'allSlots' comes from 'tutor_lesson_slots'.
-                            // If it's a generated slot, it might not be in the persisted 'tutor_lesson_slots' yet.
-                            // We need to be careful. The `selectedSlot` tells us what's available.
-                            // But `allSlots` in this function only reads `tutor_lesson_slots`.
-                            // Generated slots are usually not in `tutor_lesson_slots` until booked.
-                            // So we create a new slot entry.
-                            slotsToUpdate.push({
-                                id: `gen - ${dateStr} -${timeStr} -booked`,
-                                date: dateStr,
-                                time: timeStr,
-                                bookedBy: studentName,
-                                generated: false
-                            });
-                        }
-                    }
-                }
-
-                if (conflicts.length > 0) {
-                    setConfirmation({
-                        message: `Conflicts found for ${conflicts.length} weeks: \n${conflicts.slice(0, 3).join('\n')} \n...\nContinue booking the remaining ${10 - conflicts.length} weeks ? `,
-                        onConfirm: () => {
-                            executeBooking(bookingsToAdd, slotsToUpdate);
-                            setConfirmation(null);
-                        },
-                        onCancel: () => setConfirmation(null)
-                    });
-                    return;
-                }
-                executeBooking(bookingsToAdd, slotsToUpdate);
-
-            } else {
-                // Single Booking
-                const singleBooking = {
-                    id: selectedSlot.id,
+            }, 'student').then(() => {
+                // Also notify teacher via standardized method
+                emailService.sendRescheduleResponseToTeacher({
+                    ...rescheduleTarget,
                     date: selectedSlot.date,
-                    time: selectedSlot.time,
-                    student: studentName,
-                    studentId: studentId,
-                    subject: bookingSubject,
-                    type: 'lesson',
-                    bookedAt: new Date().toISOString(),
-                    status: 'confirmed',
-                    paymentStatus: 'Due',
-                    cost: 30
-                };
-                executeBooking([singleBooking], []);
-            }
+                    time: selectedSlot.time
+                }, 'Proposed by Student');
+            });
+
+            setNotification({ type: 'success', message: 'Reschedule Request Sent!' });
+            setShowBookingModal(false);
+        } else {
+            const newBooking = {
+                id: selectedSlot.id,
+                date: selectedSlot.date,
+                time: selectedSlot.time,
+                student: displayName,
+                studentId: studentId,
+                subject: bookingSubject,
+                type: isRecurring ? 'weekly' : 'lesson',
+                bookedAt: new Date().toISOString(),
+                status: 'confirmed',
+                paymentStatus: 'Due',
+                cost: hourlyRate
+            };
+            localStorage.setItem('tutor_bookings', JSON.stringify([...allBookings, newBooking]));
+
+            // Notify Teacher
+            emailService.sendNewBookingNotificationToTeacher({
+                ...newBooking,
+                recurringId: isRecurring ? `recurring_${Date.now()}` : undefined
+            });
+
+            setNotification({ type: 'success', message: isRecurring ? 'Weekly Recurring Lesson Booked!' : 'Lesson Booked!' });
+            setShowBookingModal(false);
         }
+        window.dispatchEvent(new Event('storage'));
+        setActiveTab('overview');
     };
 
-    // Review Logic
     const initiateReview = (lesson) => {
         setReviewTarget(lesson);
         setReviewRating(0);
@@ -576,7 +267,6 @@ const StudentDashboard = () => {
 
     const submitReview = () => {
         if (!reviewTarget || !reviewRating) return;
-
         const newReview = {
             id: Date.now(),
             studentName: displayName,
@@ -586,29 +276,12 @@ const StudentDashboard = () => {
             lessonId: reviewTarget.id,
             subject: reviewTarget.subject
         };
-
-        // Save to public reviews
         const existingReviews = JSON.parse(localStorage.getItem('tutor_public_reviews')) || [];
         localStorage.setItem('tutor_public_reviews', JSON.stringify([...existingReviews, newReview]));
 
-        // Update Session History to mark as reviewed
-        const updatedHistory = history.map(h => {
-            if (h.id === reviewTarget.id) {
-                return { ...h, hasReview: true };
-            }
-            return h;
-        });
-        setHistory(updatedHistory);
-
-        // Update LocalStorage for history
         const allHistory = JSON.parse(localStorage.getItem('tutor_session_history')) || [];
-        const updatedAllHistory = allHistory.map(h => {
-            if (h.id === reviewTarget.id) {
-                return { ...h, hasReview: true };
-            }
-            return h;
-        });
-        localStorage.setItem('tutor_session_history', JSON.stringify(updatedAllHistory));
+        const updatedHistory = allHistory.map(h => h.id === reviewTarget.id ? { ...h, hasReview: true } : h);
+        localStorage.setItem('tutor_session_history', JSON.stringify(updatedHistory));
 
         setShowReviewModal(false);
         window.dispatchEvent(new Event('storage'));
@@ -625,615 +298,259 @@ const StudentDashboard = () => {
         setActiveTab('booking');
     };
 
-    const handleStudentResponse = (booking, accepted) => {
-        const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
-        // deep copy for safety
-        let updatedBookings = allBookings.map(b => ({ ...b }));
-
-        if (accepted) {
-            const oldDate = booking.date;
-            const oldTime = booking.time;
-            const newDate = booking.teacherProposed.newDate;
-            const newTime = booking.teacherProposed.newTime;
-
-            updatedBookings = updatedBookings.map(b => {
-                if (b.id === booking.id) {
-                    return {
-                        ...b,
-                        status: 'confirmed',
-                        date: newDate,
-                        time: newTime,
-                        teacherProposed: undefined
-                    };
-                }
-                return b;
-            });
-
-            // Update Slots Availability
-            const allSlots = JSON.parse(localStorage.getItem('tutor_lesson_slots')) || [];
-            const updatedSlots = allSlots.map(s => {
-                // Free old slot
-                if (s.date === oldDate && s.time === oldTime) return { ...s, bookedBy: null };
-                // Book new slot
-                if (s.date === newDate && s.time === newTime) return { ...s, bookedBy: booking.student };
-                return s;
-            });
-            localStorage.setItem('tutor_lesson_slots', JSON.stringify(updatedSlots));
-
-            alert("Reschedule Confirmed! See you at the new time.");
-        } else {
-            updatedBookings = updatedBookings.map(b => {
-                if (b.id === booking.id) {
-                    return {
-                        ...b,
-                        status: 'confirmed',
-                        teacherProposed: undefined
-                    };
-                }
-                return b;
-            });
-            alert("Reschedule Declined. Keeping original time.");
-            // Notify Teacher of Decline
-            emailService.sendRescheduleResponse(booking, 'Declined');
-        }
-
-        localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+    const handleSendMessage = () => {
+        if (!newMessage.trim()) return;
+        const msg = {
+            sender: displayName,
+            message: newMessage,
+            timestamp: new Date().toISOString()
+        };
+        const allMessages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
+        const studentMessages = allMessages[studentName] || [];
+        const updatedMessages = { ...allMessages, [studentName]: [...studentMessages, msg] };
+        localStorage.setItem('chat_messages_v2', JSON.stringify(updatedMessages));
+        setChatMessages([...studentMessages, msg]);
+        setNewMessage('');
         window.dispatchEvent(new Event('storage'));
-
-        if (accepted) {
-            // Notify Teacher of Approval
-            emailService.sendRescheduleResponse(booking, 'Approved');
-        }
-    };
-
-    const cancelBooking = (booking) => {
-        setCancelTarget(booking);
     };
 
     const handleConfirmCancellation = (cancelSeries = false) => {
         if (!cancelTarget) return;
         const booking = cancelTarget;
         const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
-        const allSlots = JSON.parse(localStorage.getItem('tutor_lesson_slots')) || [];
-
-        let updatedBookings;
-        let updatedSlots;
-
-        if (cancelSeries && booking.recurringId) {
-            const now = new Date();
-            const seriesToDelete = allBookings.filter(b =>
-                b.recurringId === booking.recurringId &&
-                new Date(b.date + 'T' + b.time) >= now
-            );
-
-            updatedBookings = allBookings.map(b => seriesToDelete.find(s => s.id === b.id) ? { ...b, status: 'cancelled' } : b);
-
-            // Free slots
-            updatedSlots = allSlots.map(s => {
-                const isBookedInSeries = seriesToDelete.find(b => b.date === s.date && b.time === s.time);
-                return isBookedInSeries ? { ...s, bookedBy: null } : s;
-            });
-
-            // Notify Teacher (Series)
-            emailService.sendCancellationNotice({
-                ...booking,
-                subject: `${booking.subject} (Entire Series Cancelled)`
-            }, 'student');
-
-        } else {
-            updatedBookings = allBookings.map(b => b.id === booking.id ? { ...b, status: 'cancelled' } : b);
-            updatedSlots = allSlots.map(s => (s.date === booking.date && s.time === booking.time) ? { ...s, bookedBy: null } : s);
-
-            // Notify Teacher (Single)
-            emailService.sendCancellationNotice(booking, 'student');
-        }
-
+        const updatedBookings = allBookings.map(b => b.id === booking.id ? { ...b, status: 'cancelled' } : b);
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+
+        const allSlots = JSON.parse(localStorage.getItem('tutor_lesson_slots')) || [];
+        const updatedSlots = allSlots.map(s => (s.date === booking.date && s.time === booking.time) ? { ...s, bookedBy: null } : s);
         localStorage.setItem('tutor_lesson_slots', JSON.stringify(updatedSlots));
+
+        // Notify Tutor
+        emailService.sendCancellationNotice(booking, 'student');
+
         window.dispatchEvent(new Event('storage'));
-        setNotification({ type: 'success', message: cancelSeries ? 'Series Cancelled.' : 'Lesson Cancelled.' });
+        setNotification({ type: 'success', message: 'Lesson Cancelled.' });
         setCancelTarget(null);
     };
 
-    // Calculate Stats
-    const totalSessions = history.length;
+    const handleStudentResponse = (booking, accepted) => {
+        const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
+        const updatedBookings = allBookings.map(b => {
+            if (b.id === booking.id) {
+                if (accepted) {
+                    return { ...b, status: 'confirmed', date: booking.teacherProposed.newDate, time: booking.teacherProposed.newTime, teacherProposed: undefined };
+                }
+                return { ...b, status: 'confirmed', teacherProposed: undefined };
+            }
+            return b;
+        });
+        localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+        window.dispatchEvent(new Event('storage'));
+
+        // Notify Teacher
+        emailService.sendRescheduleResponseToTeacher(booking, accepted ? 'Accepted' : 'Declined');
+
+        setNotification({ type: 'success', message: accepted ? 'Reschedule Accepted!' : 'Reschedule Declined.' });
+    };
+
+    const nextLesson = bookings.find(b => new Date(b.date + 'T' + b.time) > new Date() && b.status !== 'cancelled');
     const unpaidInvoices = history.filter(h => h.paymentStatus === 'Due').length;
-    const nextLesson = bookings.length > 0 ? bookings.find(b => new Date(b.date + 'T' + b.time) > new Date()) : null;
 
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col font-sans text-gray-800">
             {/* Navigation Bar */}
             <nav className="bg-white sticky top-0 z-50 border-b border-gray-200">
-                <div className="max-w-6xl mx-auto px-6 h-20 flex justify-between items-center">
+                <div className="max-w-7xl mx-auto px-6 h-16 flex justify-between items-center">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-teal-100 flex items-center justify-center text-teal-600">
-                            <TrendingUp size={24} />
+                        <div className="w-8 h-8 bg-teal-100 flex items-center justify-center text-teal-600 rounded-lg">
+                            <TrendingUp size={20} />
                         </div>
-                        <h1 className="text-xl font-bold text-teal-500 tracking-tight">
-                            Davina's Tutoring Platform
-                        </h1>
+                        <h1 className="text-lg font-black text-teal-600 tracking-tight">Student dashboard for Davinas Tutoring Platform</h1>
                     </div>
-
                     <div className="flex items-center gap-6">
-                        <span className="font-bold text-gray-500 hidden md:block">Welcome, {displayName}</span>
-                        <button onClick={() => navigate('/')} className="text-red-400 hover:text-red-500 flex items-center gap-2 text-sm font-bold">
-                            <LogOut size={16} /> Sign Out
+                        <span className="font-bold text-gray-500 hidden md:block text-sm">Welcome, {displayName}</span>
+                        <button onClick={() => navigate('/')} className="text-red-400 hover:text-red-500 flex items-center gap-2 text-xs font-bold bg-red-50 px-3 py-1.5 rounded-lg transition-all">
+                            <LogOut size={14} /> Sign Out
                         </button>
                     </div>
                 </div>
             </nav>
-            {/* Dashboard Content */}
-            <main className="flex-1 max-w-5xl mx-auto w-full p-6 space-y-8">
 
-                {/* Pending Approvals Section */}
+            {/* Dashboard Content */}
+            <main className="flex-1 max-w-7xl mx-auto w-full p-4 md:p-6 space-y-6">
+                {/* Pending Approvals */}
                 {bookings.some(b => b.status === 'pending_student_approval') && (
-                    <div className="space-y-4 animate-in slide-in-from-top-4 duration-500">
-                        <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                            <AlertCircle className="text-orange-500" /> Action Required
+                    <div className="space-y-3">
+                        <h2 className="text-base font-bold text-gray-800 flex items-center gap-2">
+                            <AlertCircle className="text-orange-500" size={18} /> Action Required
                         </h2>
                         {bookings.filter(b => b.status === 'pending_student_approval').map(booking => (
-                            <div key={booking.id} className="bg-white border-l-4 border-orange-500 rounded-xl shadow-lg p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                                <div>
-                                    <h3 className="font-bold text-gray-900 text-lg">Reschedule Proposal</h3>
-                                    <p className="text-gray-500 text-sm">Your teacher has proposed a new time for your lesson.</p>
-                                    <div className="flex items-center gap-8 mt-4">
-                                        <div className="bg-gray-50 p-3 rounded-lg opacity-60">
-                                            <div className="text-xs font-bold uppercase text-gray-400">Original</div>
-                                            <div className="font-bold text-gray-700 strike-through decoration-red-500 line-through">
-                                                {new Date(booking.date).toLocaleDateString()} at {booking.time}
-                                            </div>
-                                        </div>
-                                        <ArrowRight className="text-gray-400" />
-                                        <div className="bg-purple-50 p-3 rounded-lg border border-purple-100">
-                                            <div className="text-xs font-bold uppercase text-purple-500">Proposed</div>
-                                            <div className="font-bold text-purple-700">
-                                                {new Date(booking.teacherProposed.newDate).toLocaleDateString()} at {booking.teacherProposed.newTime}
-                                            </div>
-                                        </div>
-                                    </div>
+                            <div key={booking.id} className="bg-white border-l-4 border-orange-500 rounded-xl shadow-md p-4 flex flex-col md:flex-row items-center justify-between gap-4">
+                                <div className="flex-1">
+                                    <h3 className="font-bold text-gray-900 text-sm">Reschedule Proposal</h3>
+                                    <p className="text-gray-400 text-xs mt-1">New time: {new Date(booking.teacherProposed.newDate).toLocaleDateString('en-GB')} at {booking.teacherProposed.newTime}</p>
                                 </div>
-                                <div className="flex gap-3">
-                                    <button
-                                        onClick={() => handleStudentResponse(booking, true)}
-                                        className="px-6 py-2 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 shadow-md transition-all flex items-center gap-2"
-                                    >
-                                        <CheckCircle size={18} /> Accept
-                                    </button>
-                                    <button
-                                        onClick={() => handleStudentResponse(booking, false)}
-                                        className="px-6 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl font-bold hover:bg-gray-50 transition-all"
-                                    >
-                                        Decline
-                                    </button>
+                                <div className="flex gap-2">
+                                    <button onClick={() => handleStudentResponse(booking, true)} className="px-4 py-2 bg-purple-600 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-sm"><CheckCircle size={14} /> Accept</button>
+                                    <button onClick={() => handleStudentResponse(booking, false)} className="px-4 py-2 bg-white border border-gray-200 text-gray-500 rounded-lg font-bold text-xs">Decline</button>
                                 </div>
                             </div>
                         ))}
                     </div>
                 )}
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-
-                    {/* Sidebar Navigation */}
-                    <div className="md:col-span-1 space-y-4">
-                        <button
-                            onClick={() => setActiveTab('overview')}
-                            className={`w-full p-4 rounded-xl text-left font-bold flex items-center gap-3 transition-all ${activeTab === 'overview' ? 'bg-teal-500 text-white shadow-lg' : 'bg-white text-gray-400 hover:bg-gray-50'} `}
-                        >
-                            <TrendingUp size={20} /> Overview
+                {/* Main Grid Layout */}
+                <div className="grid grid-cols-12 gap-6 items-start">
+                    {/* Sidebar Tabs (col-span-2) */}
+                    <div className="col-span-12 lg:col-span-2 space-y-2">
+                        <button onClick={() => setActiveTab('overview')} className={`w-full p-4 rounded-xl text-left font-black flex items-center gap-3 transition-all ${activeTab === 'overview' ? 'bg-teal-500 text-white shadow-lg' : 'bg-white text-gray-400 hover:bg-gray-50'}`}>
+                            <TrendingUp size={20} /> <span className="text-sm uppercase tracking-wider">Overview</span>
                         </button>
-                        <button
-                            onClick={() => setActiveTab('booking')}
-                            className={`w-full p-4 rounded-xl text-left font-bold flex items-center justify-between transition-all ${activeTab === 'booking' ? 'bg-teal-500 text-white shadow-lg' : 'bg-white text-gray-400 hover:bg-gray-50'} `}
-                        >
-                            <div className="flex items-center gap-3">
-                                <Calendar size={20} />
-                                <span>Book Lesson</span>
-                            </div>
-                            {availableLessons.length > 0 && (
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${activeTab === 'booking' ? 'bg-white text-teal-600' : 'bg-teal-100 text-teal-600'}`}>
-                                    {availableLessons.length > 50 ? '50+' : availableLessons.length}
-                                </span>
-                            )}
+                        <button onClick={() => setActiveTab('booking')} className={`w-full p-4 rounded-xl text-left font-black flex items-center justify-between transition-all ${activeTab === 'booking' ? 'bg-teal-500 text-white shadow-lg' : 'bg-white text-gray-400 hover:bg-gray-50'}`}>
+                            <div className="flex items-center gap-3"><Calendar size={20} /> <span className="text-sm uppercase tracking-wider">Book</span></div>
                         </button>
-                        <button
-                            onClick={() => setActiveTab('history')}
-                            className={`w-full p-4 rounded-xl text-left font-bold flex items-center gap-3 transition-all ${activeTab === 'history' ? 'bg-teal-500 text-white shadow-lg' : 'bg-white text-gray-400 hover:bg-gray-50'} `}
-                        >
-                            <Clock size={20} /> History & Feedback
+                        <button onClick={() => setActiveTab('history')} className={`w-full p-4 rounded-xl text-left font-black flex items-center gap-3 transition-all ${activeTab === 'history' ? 'bg-teal-500 text-white shadow-lg' : 'bg-white text-gray-400 hover:bg-gray-50'}`}>
+                            <Clock size={20} /> <span className="text-sm uppercase tracking-wider">History</span>
                         </button>
-                        <button
-                            onClick={() => setActiveTab('billing')}
-                            className={`w-full p-4 rounded-xl text-left font-bold flex items-center justify-between transition-all ${activeTab === 'billing' ? 'bg-teal-500 text-white shadow-lg' : 'bg-white text-gray-400 hover:bg-gray-50'} `}
-                        >
-                            <div className="flex items-center gap-3">
-                                <CreditCard size={20} />
-                                <span>Billing & Invoices</span>
-                            </div>
-                            {unpaidInvoices > 0 && (
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${activeTab === 'billing' ? 'bg-white text-red-600' : 'bg-red-100 text-red-600'}`}>
-                                    {unpaidInvoices}
-                                </span>
-                            )}
+                        <button onClick={() => setActiveTab('invoices')} className={`w-full p-4 rounded-xl text-left font-black flex items-center justify-between transition-all ${activeTab === 'invoices' ? 'bg-teal-500 text-white shadow-lg' : 'bg-white text-gray-400 hover:bg-gray-50'}`}>
+                            <div className="flex items-center gap-3"><CreditCard size={20} /> <span className="text-sm uppercase tracking-wider">Invoices</span></div>
                         </button>
-                        <button
-                            onClick={() => setActiveTab('messages')}
-                            className={`w-full p-4 rounded-xl text-left font-bold flex items-center justify-between transition-all ${activeTab === 'messages' ? 'bg-teal-500 text-white shadow-lg' : 'bg-white text-gray-400 hover:bg-gray-50'} `}
-                        >
-                            <div className="flex items-center gap-3">
-                                <MessageSquare size={20} />
-                                <span>Messages</span>
-                            </div>
-                            {(() => {
-                                const unreadCount = (chatMessages || []).filter(m => m.sender === 'Davina' && !m.read).length;
-                                return unreadCount > 0 ? (
-                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${activeTab === 'messages' ? 'bg-white text-teal-600' : 'bg-red-500 text-white animate-pulse shadow-sm'}`}>
-                                        {unreadCount > 9 ? '9+' : unreadCount}
-                                    </span>
-                                ) : null;
-                            })()}
+                        <button onClick={() => setActiveTab('messages')} className={`w-full p-4 rounded-xl text-left font-black flex items-center justify-between transition-all ${activeTab === 'messages' ? 'bg-teal-500 text-white shadow-lg' : 'bg-white text-gray-400 hover:bg-gray-50'}`}>
+                            <div className="flex items-center gap-3"><MessageSquare size={20} /> <span className="text-sm uppercase tracking-wider">Messages</span></div>
                         </button>
                     </div>
 
-                    {/* Main Content Area */}
-                    <div className="md:col-span-3 space-y-8">
-
-                        {/* Render: OVERVIEW */}
+                    {/* Content Pane (col-span-10) */}
+                    <div className="col-span-12 lg:col-span-10">
                         {activeTab === 'overview' && (
-                            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                                {/* Next Lesson Focus Widget */}
-                                {history.length > 0 && history[0].next_steps && (
-                                    <div className="bg-gradient-to-br from-purple-600 to-indigo-700 rounded-3xl p-8 text-white shadow-xl relative overflow-hidden group">
-                                        {/* Decorative background element */}
-                                        <div className="absolute -right-8 -bottom-8 w-40 h-40 bg-white/10 rounded-full blur-3xl group-hover:bg-white/20 transition-all duration-700"></div>
-
-                                        <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
-                                            <div className="flex-1">
-                                                <div className="flex items-center gap-2 mb-3">
-                                                    <div className="p-2 bg-white/20 backdrop-blur-md rounded-lg">
-                                                        <Star size={20} className="text-yellow-300 fill-current" />
-                                                    </div>
-                                                    <h3 className="text-sm font-bold uppercase tracking-widest text-purple-100">Next Lesson Focus</h3>
-                                                </div>
-                                                <p className="text-xl md:text-2xl font-bold leading-tight">
-                                                    "{history[0].next_steps}"
-                                                </p>
-                                                <p className="mt-4 text-purple-100/80 text-sm font-medium flex items-center gap-2">
-                                                    <Calendar size={14} /> Set by Davina on {new Date(history[0].date).toLocaleDateString()}
-                                                </p>
+                            <div className="space-y-8">
+                                {/* Next Focus Hero */}
+                                <div className="bg-gradient-to-r from-purple-600 to-indigo-700 p-8 rounded-3xl shadow-xl text-white relative overflow-hidden group">
+                                    <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-32 -mt-32 blur-3xl group-hover:bg-white/20 transition-all duration-700" />
+                                    <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
+                                        <div className="flex-1 text-center md:text-left">
+                                            <h3 className="text-teal-300 font-black uppercase tracking-[0.2em] text-[10px] mb-2 flex items-center gap-2 justify-center md:justify-start">
+                                                <Star size={14} fill="currentColor" /> Next Lesson Focus
+                                            </h3>
+                                            <div className="text-3xl md:text-4xl font-black mb-4 tracking-tight leading-tight min-h-[40px]">
+                                                {history.length > 0 && history[0].next_steps && history[0].next_steps !== 'SSSS'
+                                                    ? history[0].next_steps
+                                                    : "N/A - No specific focus set"}
                                             </div>
-                                            <button
-                                                onClick={() => setActiveTab('booking')}
-                                                className="px-6 py-3 bg-white text-purple-600 rounded-xl font-bold hover:bg-purple-50 transition-all shadow-lg flex items-center justify-center gap-2 whitespace-nowrap self-start md:self-center"
-                                            >
-                                                Book Session <ArrowRight size={18} />
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-                                {/* Cancelled Lessons Notification */}
-                                {!dismissedCancelledBanner && bookings.filter(b => b.status === 'cancelled' && new Date(b.date + 'T' + b.time) > new Date()).length > 0 && (
-                                    <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-xl relative">
-                                        <button
-                                            onClick={() => {
-                                                setDismissedCancelledBanner(true);
-                                                localStorage.setItem('dismissed_cancelled_banner', 'true');
-                                            }}
-                                            className="absolute top-3 right-3 text-red-600 hover:bg-red-100 rounded-full p-1 transition-colors"
-                                            aria-label="Dismiss notification"
-                                        >
-                                            <X size={18} />
-                                        </button>
-                                        <div className="flex items-start gap-3 pr-8">
-                                            <AlertCircle className="text-red-600 flex-shrink-0 mt-0.5" size={20} />
-                                            <div className="flex-1">
-                                                <h3 className="font-bold text-red-900 mb-1">Lessons Cancelled</h3>
-                                                <div className="text-sm text-red-800 space-y-1">
-                                                    {bookings.filter(b => b.status === 'cancelled' && new Date(b.date + 'T' + b.time) > new Date()).map(booking => (
-                                                        <div key={booking.id}>
-                                                            • {new Date(booking.date).toLocaleDateString()} at {booking.time} - {booking.subject || 'Lesson'}
-                                                        </div>
-                                                    ))}
-                                                </div>
+                                            <div className="flex items-center gap-3 text-purple-100 font-bold opacity-80 text-xs justify-center md:justify-start">
+                                                <Calendar size={12} /> <span>Next Lesson: {nextLesson ? `${new Date(nextLesson.date).toLocaleDateString('en-GB')} at ${nextLesson.time}` : "Not Scheduled"}</span>
                                             </div>
                                         </div>
-                                    </div>
-                                )}
-
-                                <div className="flex items-center justify-between">
-                                    <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-3">
-                                        <Video className="text-teal-500" /> Upcoming Lessons
-                                    </h2>
-                                    <button onClick={() => setActiveTab('booking')} className="text-teal-600 font-bold hover:underline text-sm">
-                                        + Book New
-                                    </button>
-                                </div>
-
-                                {bookings.filter(b => new Date(b.date + 'T' + b.time) > new Date()).length > 0 ? (
-                                    <div className="grid gap-4">
-                                        {bookings.filter(b => new Date(b.date + 'T' + b.time) > new Date()).map(booking => (
-                                            <div key={booking.id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col md:flex-row items-center justify-between gap-6 hover:shadow-md transition-shadow">
-                                                <div className="flex items-center gap-4 min-w-[180px]">
-                                                    <div className="bg-teal-50 text-teal-600 p-3 rounded-xl text-center min-w-[70px]">
-                                                        <div className="text-xs font-bold uppercase">{new Date(booking.date).toLocaleDateString('en-US', { month: 'short' })}</div>
-                                                        <div className="text-xl font-bold">{new Date(booking.date).getDate()}</div>
-                                                    </div>
-                                                    <div>
-                                                        <div className="font-bold text-gray-800">{new Date(booking.date).toLocaleDateString('en-US', { weekday: 'long' })}</div>
-                                                        <div className="text-gray-500 text-sm flex items-center gap-1">
-                                                            <Clock size={12} /> {booking.time}
-                                                        </div>
-                                                    </div>
-                                                </div>
-
-                                                <div className="flex-1 w-full md:w-auto">
-                                                    <div className="text-xs font-bold text-gray-400 uppercase mb-1">Focus / Note</div>
-                                                    <div className="font-medium text-gray-700 bg-gray-50 p-3 rounded-lg border border-gray-200 flex items-center justify-between group cursor-pointer hover:border-teal-300 transition-colors"
-                                                        onClick={() => {
-                                                            setEditNoteTarget({
-                                                                booking,
-                                                                currentNote: booking.subject || ''
-                                                            });
-                                                        }}
-                                                    >
-                                                        <span className={booking.subject ? '' : 'text-gray-400 italic'}>
-                                                            {booking.subject || "No notes added..."}
-                                                        </span>
-                                                        <div className="opacity-0 group-hover:opacity-100 text-teal-500">
-                                                            <FileText size={14} />
-                                                        </div>
-                                                    </div>
-                                                </div>
-
-                                                <div className="flex flex-col items-end gap-2 min-w-[100px]">
-                                                    <span className={`px-3 py-1 rounded-full text-xs font-bold ${booking.paymentStatus === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                                        {booking.paymentStatus || 'Due'}
-                                                    </span>
-                                                    {booking.paymentStatus !== 'Paid' && (
-                                                        <button
-                                                            onClick={() => handlePay({ ...booking, cost: booking.cost || 30 })}
-                                                            className="text-xs font-bold text-white bg-teal-500 hover:bg-teal-600 px-3 py-1.5 rounded-lg transition-colors shadow-sm"
-                                                        >
-                                                            Pay Now
-                                                        </button>
-                                                    )}
-                                                </div>
-
-                                                <div className="flex gap-3 min-w-[200px] justify-end flex-wrap">
-                                                    <a
-                                                        href={generateGoogleCalendarUrl(booking)}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        className="p-2.5 bg-white border border-gray-200 hover:border-blue-200 hover:text-blue-600 text-gray-400 rounded-xl font-bold transition-all text-sm flex items-center justify-center"
-                                                        title="Add to Google Calendar"
-                                                    >
-                                                        <Calendar size={16} />
-                                                    </a>
-                                                    <button
-                                                        onClick={() => handleJoinLesson(booking.studentId || studentId || booking.id)}
-                                                        className="px-5 py-2.5 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold shadow-md hover:shadow-lg transition-all flex items-center gap-2 text-sm"
-                                                    >
-                                                        <Video size={16} /> Join
-                                                    </button>
-                                                    <button
-                                                        onClick={() => initiateReschedule(booking)}
-                                                        disabled={booking.status === 'pending_reschedule'}
-                                                        className="px-4 py-2.5 bg-white border border-gray-200 hover:border-purple-200 hover:text-purple-600 text-gray-600 rounded-xl font-bold transition-all disabled:opacity-50 text-sm"
-                                                    >
-                                                        {booking.status === 'pending_reschedule' ? 'Pending' : 'Reschedule'}
-                                                    </button>
-                                                    <button
-                                                        onClick={() => cancelBooking(booking)}
-                                                        className="p-2.5 bg-white border border-gray-200 hover:border-red-200 hover:text-red-600 text-gray-400 rounded-xl font-bold transition-all text-sm"
-                                                        title="Cancel Lesson"
-                                                    >
-                                                        <Trash2 size={16} />
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <div className="text-center py-12 bg-white rounded-3xl border border-dashed border-gray-300">
-                                        <Calendar size={48} className="mx-auto mb-4 text-gray-300" />
-                                        <p className="text-gray-500 font-medium">No upcoming lessons scheduled.</p>
-                                        <button onClick={() => setActiveTab('booking')} className="mt-4 text-teal-600 font-bold hover:underline">
-                                            Book your first lesson
+                                        <button onClick={() => {
+                                            if (nextLesson) {
+                                                handleJoinLesson(nextLesson);
+                                            } else {
+                                                setActiveTab('booking');
+                                            }
+                                        }} className="bg-white text-purple-600 px-8 py-3.5 rounded-2xl font-black flex items-center gap-3 hover:bg-teal-50 transition-all shadow-xl hover:scale-105 active:scale-95 text-lg">
+                                            {nextLesson ? 'Start Lesson' : 'Book Lesson'} <ArrowRight size={18} />
                                         </button>
                                     </div>
-                                )}
-                            </div>
-                        )
-                        }
+                                </div>
 
-                        {/* Review Modal */}
-                        {
-                            showReviewModal && reviewTarget && (
-                                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setShowReviewModal(false)}>
-                                    <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-                                        <div className="text-center mb-6">
-                                            <div className="w-16 h-16 bg-yellow-100 text-yellow-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                                                <Star size={32} fill="currentColor" />
-                                            </div>
-                                            <h3 className="text-2xl font-bold text-gray-900">Rate Your Lesson</h3>
-                                            <p className="text-gray-500">How was your session on {new Date(reviewTarget.date).toLocaleDateString()}?</p>
-                                        </div>
-
-                                        <div className="space-y-6">
-                                            <div className="flex justify-center gap-2">
-                                                {[1, 2, 3, 4, 5].map((star) => (
-                                                    <button
-                                                        key={star}
-                                                        type="button"
-                                                        onClick={() => setReviewRating(star)}
-                                                        className={`p - 2 transition - all transform hover: scale - 110 ${reviewRating >= star ? 'text-yellow-400' : 'text-gray-200'} `}
-                                                    >
-                                                        <Star size={32} fill="currentColor" />
-                                                    </button>
-                                                ))}
-                                            </div>
-
-                                            <div>
-                                                <label className="block text-sm font-bold text-gray-700 mb-2">Your Feedback</label>
-                                                <textarea
-                                                    value={reviewComment}
-                                                    onChange={(e) => setReviewComment(e.target.value)}
-                                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none h-32 resize-none"
-                                                    placeholder="What did you learn? How was the teacher?"
-                                                ></textarea>
-                                            </div>
-
-                                            <button
-                                                onClick={submitReview}
-                                                disabled={!reviewRating}
-                                                className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                            >
-                                                Submit Review
-                                            </button>
-                                        </div>
+                                {/* Upcoming Lessons */}
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <h2 className="text-xl font-black text-gray-900 tracking-tight flex items-center gap-3">
+                                            <Video className="text-teal-500" size={24} /> Upcoming Lessons
+                                        </h2>
                                     </div>
-                                </div>
-                            )
-                        }
 
-                        {/* Render: BOOKING */}
-                        {
-                            activeTab === 'booking' && (
-                                <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                                    <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-3">
-                                        <Calendar className="text-purple-500" /> Available Lesson Slots
-                                    </h2>
-                                    <p className="text-gray-500 mb-4">Select a 1-hour slot to book your next lesson.</p>
-
-                                    {availableLessons.length === 0 ? (
-                                        <div className="bg-white p-12 text-center rounded-3xl border border-gray-200 text-gray-400">
-                                            <Clock size={48} className="mx-auto mb-4 opacity-30" />
-                                            <p>No available slots added primarily by teacher yet.</p>
-                                            <p className="text-sm">Please check back later.</p>
+                                    {bookings.filter(b => new Date(b.date + 'T' + b.time) > new Date() && b.status !== 'cancelled').length === 0 ? (
+                                        <div className="text-center py-12 bg-white rounded-3xl border border-gray-100 shadow-sm">
+                                            <Calendar size={48} className="mx-auto mb-4 text-gray-100" />
+                                            <p className="text-gray-400 font-black text-xs uppercase tracking-widest">No upcoming lessons</p>
                                         </div>
                                     ) : (
-                                        <div className="space-y-8">
-                                            {Object.entries(
-                                                availableLessons.reduce((groups, slot) => {
-                                                    const dateKey = slot.date;
-                                                    if (!groups[dateKey]) groups[dateKey] = [];
-                                                    groups[dateKey].push(slot);
-                                                    return groups;
-                                                }, {})
-                                            )
-                                                .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
-                                                .map(([date, slots]) => (
-                                                    <div key={date} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-                                                        <div className="bg-gray-50 px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-                                                            <div>
-                                                                <h3 className="font-bold text-gray-800 text-lg">
-                                                                    {new Date(date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-                                                                </h3>
-                                                                <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">
-                                                                    {slots.length} Slots Available
-                                                                </p>
-                                                            </div>
-                                                            {rescheduleTarget && new Date(rescheduleTarget.date).toISOString().split('T')[0] === date && (
-                                                                <span className="bg-purple-100 text-purple-700 text-xs px-2 py-1 rounded-full font-bold">Current Date</span>
-                                                            )}
+                                        <div className="grid gap-4">
+                                            {bookings.filter(b => new Date(b.date + 'T' + b.time) > new Date() && b.status !== 'cancelled').map(booking => (
+                                                <div key={booking.id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col lg:flex-row items-center justify-between gap-6 hover:shadow-xl transition-all duration-500 group">
+                                                    <div className="flex items-center gap-6 min-w-[200px]">
+                                                        <div className="bg-teal-50 text-teal-600 p-4 rounded-2xl text-center min-w-[80px] shadow-sm group-hover:bg-teal-500 group-hover:text-white transition-all duration-500">
+                                                            <div className="text-[10px] font-black uppercase tracking-widest mb-1">{new Date(booking.date).toLocaleDateString('en-GB', { month: 'short' })}</div>
+                                                            <div className="text-2xl font-black">{new Date(booking.date).getDate()}</div>
                                                         </div>
-                                                        <div className="p-6">
-                                                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                                                                {slots
-                                                                    .sort((a, b) => a.time.localeCompare(b.time))
-                                                                    .map(slot => (
-                                                                        <button
-                                                                            key={slot.id}
-                                                                            onClick={() => handleBookLesson(slot)}
-                                                                            className={`
-py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
-                                                                        ${rescheduleTarget
-                                                                                    ? 'border-purple-100 bg-purple-50 text-purple-700 hover:bg-purple-600 hover:text-white hover:border-purple-600'
-                                                                                    : 'border-gray-100 bg-gray-50 text-gray-700 hover:bg-teal-500 hover:text-white hover:border-teal-500'
-                                                                                }
-`}
-                                                                        >
-                                                                            {new Date('2000-01-01T' + slot.time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
-                                                                        </button>
-                                                                    ))}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                        </div>
-                                    )}
-                                </div>
-                            )
-                        }
-
-                        {/* Render: HISTORY */}
-                        {
-                            activeTab === 'history' && (
-                                <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                                    <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-3">
-                                        <Clock className="text-purple-500" /> Learning Timeline
-                                    </h2>
-                                    {history.length === 0 ? (
-                                        <div className="text-center py-12 text-gray-400 bg-white rounded-3xl">
-                                            <p>No past sessions logged yet.</p>
-                                        </div>
-                                    ) : (
-                                        <div className="relative border-l-4 border-gray-200 ml-6 space-y-12">
-                                            {history.map((session, idx) => (
-                                                <div key={idx} className="relative pl-8">
-                                                    {/* Timeline Dot */}
-                                                    <div className="absolute -left-[14px] top-0 w-6 h-6 bg-white border-4 border-purple-500 rounded-full"></div>
-
-                                                    <div key={session.id} className="bg-white p-4 rounded-xl border border-gray-100 flex justify-between items-center group hover:border-purple-200 transition-all">
                                                         <div>
-                                                            <div className="flex items-center gap-2 mb-1">
-                                                                <span className="font-bold text-gray-800">{session.subject}</span>
-                                                                <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Completed</span>
-                                                            </div>
-                                                            <div className="text-sm text-gray-500">
-                                                                {new Date(session.date).toLocaleDateString()} • {session.duration || '60'} mins
+                                                            <div className="font-black text-lg text-gray-900 tracking-tighter">{new Date(booking.date).toLocaleDateString('en-GB', { weekday: 'long' })}</div>
+                                                            <div className="text-gray-400 font-bold flex items-center gap-2 mt-0.5 text-sm"><Clock size={16} className="text-teal-500" /> {booking.time}</div>
+
+                                                            {/* Status Badge */}
+                                                            <div className="mt-2">
+                                                                <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${booking.status === 'pending_approval'
+                                                                    ? 'bg-purple-100 text-purple-700'
+                                                                    : booking.paymentStatus?.toLowerCase() === 'paid'
+                                                                        ? 'bg-green-100 text-green-700'
+                                                                        : 'bg-red-50 text-red-600'
+                                                                    }`}>
+                                                                    {booking.status === 'pending_approval' ? 'Pending Approval' : (booking.paymentStatus === 'Due' ? 'Payment Due' : booking.paymentStatus)}
+                                                                </span>
                                                             </div>
                                                         </div>
-                                                        {session.hasReview ? (
-                                                            <span className="text-xs font-bold text-yellow-500 bg-yellow-50 px-3 py-1 rounded-full flex items-center gap-1">
-                                                                <Star size={12} fill="currentColor" /> Reviewed
-                                                            </span>
-                                                        ) : (
-                                                            <button
-                                                                onClick={() => initiateReview(session)}
-                                                                className="text-sm font-bold text-purple-600 hover:bg-purple-50 px-3 py-1.5 rounded-lg transition-colors"
-                                                            >
-                                                                Write Review
-                                                            </button>
-                                                        )}
                                                     </div>
-                                                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 hover:border-purple-200 transition-all">
-                                                        <div className="flex justify-between items-start mb-4">
-                                                            <div>
-                                                                <h4 className="font-bold text-lg text-gray-900">{session.topic || 'General Session'}</h4>
-                                                                <span className="text-sm font-bold text-gray-400 uppercase">{new Date(session.date).toLocaleDateString()}</span>
-                                                            </div>
-                                                            {session.rating && (
-                                                                <div className="flex gap-1">
-                                                                    {[...Array(5)].map((_, i) => (
-                                                                        <Star key={i} size={14} className={i < session.rating ? "text-yellow-400 fill-current" : "text-gray-200"} />
-                                                                    ))}
-                                                                </div>
+
+                                                    <div className="flex-1 w-full">
+                                                        <div className="text-[10px] font-black text-gray-300 uppercase tracking-widest mb-2 ml-1">Lesson Focus</div>
+                                                        <div onClick={() => setEditNoteTarget({ booking, currentNote: booking.subject || '' })} className="bg-gray-50/50 p-4 rounded-xl border border-gray-100 flex items-start justify-between group cursor-pointer hover:border-teal-200 transition-all shadow-inner bg-white min-h-[80px]">
+                                                            <p className={`text-sm leading-relaxed font-bold tracking-tight ${booking.subject ? 'text-gray-700' : 'text-gray-300 italic'}`}>
+                                                                {booking.subject || "Add notes for your tutor..."}
+                                                            </p>
+                                                            <div className="text-teal-500 bg-teal-50 p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all shadow-sm"><FileText size={18} /></div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="flex flex-col items-center lg:items-end gap-3 min-w-[280px]">
+                                                        <div className="flex items-center gap-2 w-full">
+                                                            {booking.status === 'pending_approval' ? (
+                                                                <>
+                                                                    <button
+                                                                        onClick={() => handleApproval(booking)}
+                                                                        className="flex-1 bg-green-600 hover:bg-green-700 text-white px-5 py-3 rounded-xl font-black text-xs transition-all shadow-lg flex items-center justify-center gap-2 uppercase tracking-widest"
+                                                                    >
+                                                                        Approve {booking.recurringId && 'Series'}
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => handleDenial(booking)}
+                                                                        className="bg-red-50 text-red-600 px-5 py-3 rounded-xl font-black text-xs hover:bg-red-600 hover:text-white transition-all border border-red-100 uppercase tracking-widest"
+                                                                    >
+                                                                        Deny
+                                                                    </button>
+                                                                </>
+                                                            ) : (
+                                                                <>
+                                                                    <button
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            const url = generateGoogleCalendarUrl({
+                                                                                date: booking.date,
+                                                                                time: booking.time,
+                                                                                subject: booking.subject || 'Tutoring Session'
+                                                                            });
+                                                                            window.open(url, '_blank');
+                                                                        }}
+                                                                        className="flex items-center justify-center p-3 text-gray-400 hover:text-teal-600 hover:bg-teal-50 rounded-xl transition-all border border-gray-100"
+                                                                        title="Add to Calendar"
+                                                                    >
+                                                                        <Calendar size={18} />
+                                                                    </button>
+                                                                    <button onClick={() => handleJoinLesson(booking)} className="flex-1 bg-purple-600 hover:bg-purple-700 text-white px-5 py-3 rounded-xl font-black text-xs transition-all shadow-lg flex items-center justify-center gap-2 uppercase tracking-widest">
+                                                                        <Video size={16} /> Start Lesson
+                                                                    </button>
+                                                                </>
                                                             )}
                                                         </div>
-
-                                                        <div className="grid md:grid-cols-2 gap-6">
-                                                            <div className="bg-green-50 p-4 rounded-xl">
-                                                                <h5 className="font-bold text-green-800 text-xs uppercase mb-2 flex items-center gap-2">
-                                                                    <CheckCircle size={14} /> Went Well
-                                                                </h5>
-                                                                <p className="text-gray-700 text-sm">{session.feedback_well}</p>
-                                                            </div>
-                                                            <div className="bg-amber-50 p-4 rounded-xl">
-                                                                <h5 className="font-bold text-amber-800 text-xs uppercase mb-2 flex items-center gap-2">
-                                                                    <TrendingUp size={14} /> To Improve / Next Lesson
-                                                                </h5>
-                                                                <p className="text-gray-700 text-sm">{session.feedback_improve} {session.next_steps && `— Focus: ${session.next_steps} `}</p>
-                                                            </div>
+                                                        <div className="flex items-center gap-2 w-full">
+                                                            <button
+                                                                onClick={() => initiateReschedule(booking)}
+                                                                className="flex-1 py-2 text-xs font-black text-purple-600 bg-purple-50 hover:bg-purple-100 rounded-xl transition-all border border-purple-100 flex items-center justify-center gap-2 uppercase tracking-widest"
+                                                            >
+                                                                <Clock size={14} /> Reschedule
+                                                            </button>
+                                                            <button onClick={() => { setCancelTarget(booking); }} className="p-2.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all border border-gray-100" title="Cancel"><Trash2 size={16} /></button>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -1241,781 +558,328 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
                                         </div>
                                     )}
                                 </div>
-                            )
-                        }
+                            </div>
+                        )}
 
-                        {/* Render: BILLING */}
-                        {
-                            activeTab === 'billing' && (
-                                <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                                    <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-3">
-                                        <CreditCard className="text-blue-500" /> Invoices & Payments
-                                    </h2>
-                                    <div className="bg-white rounded-3xl shadow-sm border border-gray-200 overflow-hidden">
-                                        {/* Desktop Table View */}
-                                        <div className="hidden md:block overflow-x-auto">
-                                            <table className="w-full text-left">
-                                                <thead className="bg-gray-50 border-b border-gray-100">
-                                                    <tr>
-                                                        <th className="p-4 font-bold text-gray-400 text-xs uppercase">Date</th>
-                                                        <th className="p-4 font-bold text-gray-400 text-xs uppercase">Description</th>
-                                                        <th className="p-4 font-bold text-gray-400 text-xs uppercase">Amount</th>
-                                                        <th className="p-4 font-bold text-gray-400 text-xs uppercase">Status</th>
-                                                        <th className="p-4 font-bold text-gray-400 text-xs uppercase">Lesson</th>
-                                                        <th className="p-4 font-bold text-gray-400 text-xs uppercase text-right">Action</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-gray-100">
-                                                    {(() => {
-                                                        const allMetrics = [...bookings, ...history].sort((a, b) => new Date(b.date + 'T' + (b.time || '00:00')) - new Date(a.date + 'T' + (a.time || '00:00')));
-                                                        const processedSeries = new Set();
-                                                        const rows = [];
-
-                                                        allMetrics.forEach(item => {
-                                                            const isSeries = item.recurringId || (item.id && typeof item.id === 'string' && item.id.includes('wk'));
-
-                                                            let seriesId = null;
-                                                            if (isSeries) {
-                                                                if (item.recurringId) seriesId = item.recurringId;
-                                                                else if (typeof item.id === 'string' && item.id.includes(' - wk')) seriesId = item.id.split(' - wk')[0];
-                                                                else if (typeof item.id === 'string' && item.id.includes('- wk')) seriesId = item.id.split('- wk')[0];
-                                                            }
-
-                                                            if (seriesId) {
-                                                                if (processedSeries.has(seriesId)) return;
-
-                                                                const seriesItems = allMetrics.filter(i =>
-                                                                    i.recurringId === seriesId ||
-                                                                    (i.id && typeof i.id === 'string' && (i.id.startsWith(seriesId + ' - wk') || i.id.startsWith(seriesId + '- wk')))
-                                                                );
-
-                                                                if (seriesItems.length > 1) {
-                                                                    processedSeries.add(seriesId);
-                                                                    seriesItems.sort((a, b) => new Date(a.date) - new Date(b.date));
-
-                                                                    const isPaid = seriesItems.every(i => i.paymentStatus === 'Paid');
-
-                                                                    rows.push({
-                                                                        id: seriesId,
-                                                                        date: seriesItems[0].date,
-                                                                        time: seriesItems[0].time,
-                                                                        subject: "10-Week Tuition Block",
-                                                                        cost: 280,
-                                                                        paymentStatus: isPaid ? 'Paid' : 'Due',
-                                                                        isGroup: true,
-                                                                        seriesIds: seriesItems.map(i => i.id).filter(id => id), // Ensure valid IDs
-                                                                        itemCount: seriesItems.length
-                                                                    });
-                                                                } else {
-                                                                    rows.push(item);
-                                                                }
-                                                            } else {
-                                                                rows.push(item);
-                                                            }
-                                                        });
-
-                                                        const unpaidRows = rows.filter(r => r.paymentStatus !== 'Paid').sort((a, b) => new Date(a.date) - new Date(b.date));
-                                                        const nextDueId = unpaidRows.length > 0 ? unpaidRows[0].id : null;
-
-                                                        // Sort rows to put "Due" (nextDueId) at the top
-                                                        rows.sort((a, b) => {
-                                                            if (a.id === nextDueId) return -1;
-                                                            if (b.id === nextDueId) return 1;
-                                                            return 0;
-                                                        });
-
-                                                        return rows.map((invoice) => {
-                                                            let statusLabel = invoice.paymentStatus || 'Due';
-                                                            let statusColor = '';
-
-                                                            if (invoice.paymentStatus === 'Paid') {
-                                                                statusLabel = 'Completed';
-                                                                statusColor = 'bg-green-100 text-green-700 border border-green-200';
-                                                            } else {
-                                                                if (invoice.id === nextDueId) {
-                                                                    statusLabel = 'Due';
-                                                                    statusColor = 'bg-red-100 text-red-700 border border-red-200 font-bold animate-pulse';
-                                                                } else {
-                                                                    statusLabel = 'Unpaid';
-                                                                    statusColor = 'bg-gray-100 text-gray-500 border border-gray-200';
-                                                                }
-                                                            }
-
-                                                            return (
-                                                                <React.Fragment key={invoice.id || Math.random()}>
-                                                                    <tr className="hover:bg-gray-50 transition-colors">
-                                                                        <td className="p-4">
-                                                                            <div className="font-bold text-gray-700">{new Date(invoice.date).toLocaleDateString()}</div>
-                                                                            {invoice.isGroup && <div className="text-xs text-purple-600 font-medium">Starts {invoice.time}</div>}
-                                                                            {!invoice.isGroup && <div className="text-xs text-gray-400">{invoice.time}</div>}
-                                                                        </td>
-                                                                        <td className="p-4 text-gray-600 text-sm">
-                                                                            {invoice.subject || invoice.topic || 'Tutoring Session'}
-                                                                            {invoice.isGroup && (
-                                                                                <div className="mt-1">
-                                                                                    <span className="text-xs bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full font-bold">10 Sessions</span>
-                                                                                    <button
-                                                                                        onClick={() => setExpandedBlockId(expandedBlockId === invoice.id ? null : invoice.id)}
-                                                                                        className="ml-2 text-xs text-purple-700 underline hover:text-purple-900"
-                                                                                    >
-                                                                                        {expandedBlockId === invoice.id ? 'Hide Dates' : 'Show Dates'}
-                                                                                    </button>
-                                                                                </div>
-                                                                            )}
-                                                                        </td>
-                                                                        <td className="p-4 font-bold text-gray-900">£{invoice.cost || 30}</td>
-                                                                        <td className="p-4">
-                                                                            <span className={`px-2 py-1 rounded-full text-xs font-bold ${statusColor}`}>
-                                                                                {statusLabel}
-                                                                            </span>
-                                                                        </td>
-                                                                        <td className="p-4">
-                                                                            {invoice.isGroup ? (
-                                                                                <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-lg font-bold uppercase tracking-wider border border-gray-200">
-                                                                                    Series
-                                                                                </span>
-                                                                            ) : (invoice.feedback_well || invoice.lessonTopic ? (
-                                                                                <span className="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-lg font-black uppercase tracking-wider border border-blue-200 shadow-sm">
-                                                                                    Completed
-                                                                                </span>
-                                                                            ) : (
-                                                                                <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-lg font-bold uppercase tracking-wider border border-gray-200">
-                                                                                    Scheduled
-                                                                                </span>
-                                                                            ))}
-                                                                        </td>
-                                                                        <td className="p-4 text-right">
-                                                                            {invoice.paymentStatus !== 'Paid' ? (
-                                                                                <div className="flex gap-2 justify-end">
-                                                                                    <button
-                                                                                        onClick={() => handlePay(invoice)}
-                                                                                        className="bg-blue-600 text-white px-6 py-2 rounded-lg text-xs font-bold hover:bg-blue-700 shadow-md transition-all"
-                                                                                    >
-                                                                                        Pay via Stripe
-                                                                                    </button>
-                                                                                </div>
-                                                                            ) : (
-                                                                                <button
-                                                                                    onClick={() => handleReceipt(invoice)}
-                                                                                    className="text-teal-600 hover:text-teal-700 flex items-center gap-1 justify-end w-full text-xs font-bold transition-colors"
-                                                                                >
-                                                                                    <FileText size={14} /> Receipt
-                                                                                </button>
-                                                                            )}
-                                                                        </td>
-                                                                    </tr>
-                                                                    {invoice.isGroup && expandedBlockId === invoice.id && (
-                                                                        <tr>
-                                                                            <td colSpan="6" className="bg-purple-50 p-4 rounded-xl">
-                                                                                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                                                                                    {(() => {
-                                                                                        const allItems = [...bookings, ...history];
-                                                                                        const series = allItems.filter(i => i.recurringId === invoice.id || (i.id && typeof i.id === 'string' && i.id.startsWith(invoice.id)));
-                                                                                        series.sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
-
-                                                                                        return series.map((s, i) => (
-                                                                                            <div key={i} className="bg-white p-2 rounded border border-purple-100 text-center">
-                                                                                                <div className="text-xs font-bold text-gray-500">Lesson {i + 1}</div>
-                                                                                                <div className="font-bold text-purple-700">{new Date(s.date).toLocaleDateString()}</div>
-                                                                                                <div className="text-xs text-gray-400">{s.time}</div>
-                                                                                            </div>
-                                                                                        ));
-                                                                                    })()}
-                                                                                </div>
-                                                                            </td>
-                                                                        </tr>
-                                                                    )}
-                                                                </React.Fragment>
-                                                            );
-                                                        });
-                                                    })()}
-                                                </tbody>
-                                            </table>
-                                        </div>
-
-                                        {/* Mobile Card View */}
-                                        <div className="md:hidden space-y-4 p-4">
-                                            {(() => {
-                                                const allMetrics = [...bookings, ...history].sort((a, b) => new Date(b.date + 'T' + (b.time || '00:00')) - new Date(a.date + 'T' + (a.time || '00:00')));
-                                                const processedSeries = new Set();
-                                                const rows = [];
-
-                                                allMetrics.forEach(item => {
-                                                    const isSeries = item.recurringId || (item.id && typeof item.id === 'string' && item.id.includes('wk'));
-
-                                                    let seriesId = null;
-                                                    if (isSeries) {
-                                                        if (item.recurringId) seriesId = item.recurringId;
-                                                        else if (typeof item.id === 'string' && item.id.includes(' - wk')) seriesId = item.id.split(' - wk')[0];
-                                                        else if (typeof item.id === 'string' && item.id.includes('- wk')) seriesId = item.id.split('- wk')[0];
-                                                    }
-
-                                                    if (seriesId) {
-                                                        if (processedSeries.has(seriesId)) return;
-
-                                                        const seriesItems = allMetrics.filter(i =>
-                                                            i.recurringId === seriesId ||
-                                                            (i.id && typeof i.id === 'string' && (i.id.startsWith(seriesId + ' - wk') || i.id.startsWith(seriesId + '- wk')))
-                                                        );
-
-                                                        if (seriesItems.length > 1) {
-                                                            processedSeries.add(seriesId);
-                                                            seriesItems.sort((a, b) => new Date(a.date) - new Date(b.date));
-
-                                                            const isPaid = seriesItems.every(i => i.paymentStatus === 'Paid');
-
-                                                            rows.push({
-                                                                id: seriesId,
-                                                                date: seriesItems[0].date,
-                                                                time: seriesItems[0].time,
-                                                                subject: "10-Week Tuition Block",
-                                                                cost: 280,
-                                                                paymentStatus: isPaid ? 'Paid' : 'Due',
-                                                                isGroup: true,
-                                                                seriesIds: seriesItems.map(i => i.id).filter(id => id),
-                                                                itemCount: seriesItems.length
-                                                            });
-                                                        } else {
-                                                            rows.push(item);
-                                                        }
-                                                    } else {
-                                                        rows.push(item);
-                                                    }
-                                                });
-
-                                                const unpaidRows = rows.filter(r => r.paymentStatus !== 'Paid').sort((a, b) => new Date(a.date) - new Date(b.date));
-                                                const nextDueId = unpaidRows.length > 0 ? unpaidRows[0].id : null;
-
-                                                rows.sort((a, b) => {
-                                                    if (a.id === nextDueId) return -1;
-                                                    if (b.id === nextDueId) return 1;
-                                                    return 0;
-                                                });
-
-                                                if (rows.length === 0) {
-                                                    return <div className="p-8 text-center text-gray-400 italic">No invoices found.</div>;
-                                                }
-
-                                                return rows.map((invoice) => {
-                                                    let statusLabel = invoice.paymentStatus || 'Due';
-                                                    let statusColor = invoice.paymentStatus === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
-                                                    if (invoice.id === nextDueId && invoice.paymentStatus !== 'Paid') statusColor += ' animate-pulse border-red-200 border';
-                                                    if (invoice.paymentStatus === 'Paid') statusLabel = 'Completed';
-
-                                                    return (
-                                                        <div key={invoice.id || Math.random()} className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-500">
-                                                            <div className="flex justify-between items-start mb-3">
-                                                                <div>
-                                                                    <div className="font-bold text-gray-800">{new Date(invoice.date).toLocaleDateString()}</div>
-                                                                    <div className="text-xs text-gray-500">{invoice.time}</div>
-                                                                </div>
-                                                                <div className="text-right">
-                                                                    <div className="font-bold text-xl text-gray-900">£{invoice.cost || 30}</div>
-                                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${statusColor}`}>{statusLabel}</span>
-                                                                </div>
-                                                            </div>
-                                                            <div className="mb-4">
-                                                                <h4 className="text-sm font-bold text-gray-700">{invoice.subject || invoice.topic || 'Tutoring Session'}</h4>
-                                                                {invoice.isGroup && <div className="text-xs text-purple-600 mt-1">10-Session Series</div>}
-                                                            </div>
-
-                                                            {invoice.isGroup && (
-                                                                <button
-                                                                    onClick={() => setExpandedBlockId(expandedBlockId === invoice.id ? null : invoice.id)}
-                                                                    className="w-full mb-3 py-2 text-xs font-bold text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors"
-                                                                >
-                                                                    {expandedBlockId === invoice.id ? 'Hide Dates' : 'Show Lesson Dates'}
-                                                                </button>
-                                                            )}
-
-                                                            {invoice.isGroup && expandedBlockId === invoice.id && (
-                                                                <div className="grid grid-cols-2 gap-2 mb-4 bg-gray-50 p-2 rounded-lg animate-in zoom-in-95 duration-200">
-                                                                    {(() => {
-                                                                        const allItems = [...bookings, ...history];
-                                                                        const series = allItems.filter(i => i.recurringId === invoice.id || (i.id && typeof i.id === 'string' && i.id.startsWith(invoice.id)));
-                                                                        series.sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
-                                                                        return series.map((s, i) => (
-                                                                            <div key={i} className="bg-white p-2 rounded border border-gray-200 text-center">
-                                                                                <div className="text-[10px] font-bold text-gray-500">Lesson {i + 1}</div>
-                                                                                <div className="text-xs font-bold text-purple-700">{new Date(s.date).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })}</div>
-                                                                            </div>
-                                                                        ));
-                                                                    })()}
-                                                                </div>
-                                                            )}
-
-                                                            {invoice.paymentStatus !== 'Paid' ? (
-                                                                <button
-                                                                    onClick={() => handlePay(invoice)}
-                                                                    className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md active:scale-95 transition-all text-sm hover:bg-blue-700"
-                                                                >
-                                                                    Pay Amount
-                                                                </button>
-                                                            ) : (
-                                                                <button
-                                                                    onClick={() => handleReceipt(invoice)}
-                                                                    className="w-full py-3 text-teal-600 bg-teal-50 border border-teal-100 rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-teal-100 transition-colors"
-                                                                >
-                                                                    <FileText size={16} /> View Receipt
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                });
-                                            })()}
-                                        </div>
+                        {activeTab === 'booking' && (
+                            <div className="space-y-6">
+                                <h2 className="text-xl font-black text-gray-900 tracking-tight flex items-center gap-3"><Calendar className="text-purple-600" size={24} /> Book New Lesson</h2>
+                                {availableLessons.length === 0 ? (
+                                    <div className="bg-white p-12 text-center rounded-3xl border border-gray-100 shadow-sm">
+                                        <Clock size={48} className="mx-auto mb-4 text-gray-100" />
+                                        <p className="text-gray-400 font-black text-xs uppercase tracking-widest">No slots found</p>
                                     </div>
-                                </div>
-                            )
-                        }
-
-                        {/* Render: MESSAGES */}
-                        {
-                            activeTab === 'messages' && (
-                                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                                    <div className="flex items-center justify-between">
-                                        <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-3">
-                                            <MessageSquare className="text-teal-500" /> Messages
-                                        </h2>
-                                    </div>
-
-                                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                                        {/* Chat Messages */}
-                                        <div className="h-96 overflow-y-auto p-6 space-y-4 bg-gray-50">
-                                            {chatMessages.length === 0 ? (
-                                                <div className="h-full flex items-center justify-center text-gray-400 italic">
-                                                    No messages yet. Start a conversation with your teacher!
+                                ) : (
+                                    <div className="grid gap-6">
+                                        {Object.entries(availableLessons.reduce((groups, slot) => {
+                                            const dateKey = slot.date;
+                                            if (!groups[dateKey]) groups[dateKey] = [];
+                                            groups[dateKey].push(slot);
+                                            return groups;
+                                        }, {})).map(([date, slots]) => (
+                                            <div key={date} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                                                <div className="bg-gray-50/50 px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                                                    <h3 className="text-lg font-black text-gray-900">{new Date(date).toLocaleDateString('en-GB', { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
+                                                    <span className="bg-white px-3 py-1 rounded-full text-[10px] font-black text-gray-400 shadow-sm">{slots.length} SLOTS</span>
                                                 </div>
-                                            ) : (
-                                                chatMessages.map((msg, idx) => (
-                                                    <div key={idx} className={`flex ${msg.sender === displayName ? 'justify-end' : 'justify-start'} mb-4`}>
-                                                        <div className={`max-w-[70%] px-4 py-3 rounded-2xl shadow-sm ${msg.sender === displayName ? 'bg-gradient-to-br from-teal-500 to-teal-600 text-white rounded-br-md' : 'bg-white border-2 border-gray-100 text-gray-800 rounded-bl-md'}`}>
-                                                            <div className="text-xs font-bold mb-2 ${msg.sender === displayName ? 'text-teal-100' : 'text-gray-500'}">{msg.sender}</div>
-                                                            <div className="text-base leading-relaxed">{msg.message}</div>
-                                                            <div className="text-xs mt-2 ${msg.sender === displayName ? 'text-teal-100' : 'text-gray-400'}">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                                                <div className="p-6">
+                                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                                                        {slots.map(slot => (
+                                                            <button key={slot.id} onClick={() => handleBookLesson(slot)} className="p-4 bg-blue-50/80 border border-blue-100 rounded-xl font-black text-sm text-blue-700 hover:border-teal-500 hover:text-teal-600 hover:bg-teal-50/50 transition-all text-center shadow-sm">
+                                                                {new Date(`2000-01-01T${slot.time}`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {activeTab === 'history' && (
+                            <div className="space-y-6">
+                                <h2 className="text-xl font-black text-gray-900 tracking-tight flex items-center gap-3"><Clock className="text-purple-600" size={24} /> Learning History</h2>
+                                {history.length === 0 ? (
+                                    <div className="text-center py-12 bg-white rounded-3xl border border-gray-100 shadow-sm">
+                                        <p className="text-gray-400 font-black text-xs uppercase tracking-widest">No past sessions yet</p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-6 relative before:absolute before:left-[35px] before:top-4 before:bottom-4 before:w-0.5 before:bg-gray-100">
+                                        {history.map((session, idx) => (
+                                            <div key={idx} className="relative pl-16">
+                                                <div className="absolute left-[28px] top-6 w-4 h-4 bg-white border-2 border-purple-500 rounded-full z-10 shadow-sm" />
+                                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:border-purple-200 transition-all overflow-hidden relative">
+
+                                                    <div className="flex flex-col md:flex-row justify-between items-start gap-4 mb-6">
+                                                        <div>
+                                                            <h4 className="text-lg font-black text-gray-900 mb-0.5">{session.topic || session.subject || "Session"}</h4>
+                                                            <div className="flex items-center gap-2 text-gray-400 font-bold uppercase text-[10px] tracking-widest">
+                                                                <span>{new Date(session.date).toLocaleDateString('en-GB')}</span>
+                                                                <span>•</span>
+                                                                <span>{session.duration || '60'} MINS</span>
+                                                            </div>
+                                                        </div>
+                                                        {session.rating ? (
+                                                            <div className="flex gap-0.5 bg-yellow-50 px-3 py-1.5 rounded-lg">
+                                                                {[...Array(5)].map((_, i) => (
+                                                                    <Star key={i} size={14} className={i < session.rating ? "text-yellow-400 fill-current" : "text-gray-200"} />
+                                                                ))}
+                                                            </div>
+                                                        ) : (
+                                                            <button onClick={() => initiateReview(session)} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest">Rate Lesson</button>
+                                                        )}
+                                                    </div>
+
+                                                    {/* 4 Feedback Boxes as requested */}
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                        <div className="bg-green-50 p-4 rounded-xl border border-green-100">
+                                                            <h5 className="font-black text-green-700 text-[10px] uppercase tracking-widest mb-2 flex items-center gap-2"><CheckCircle size={14} /> Went Well</h5>
+                                                            <p className="text-gray-700 font-semibold text-xs leading-relaxed">{session.feedback_well || "No comment."}</p>
+                                                        </div>
+                                                        <div className="bg-orange-50 p-4 rounded-xl border border-orange-100">
+                                                            <h5 className="font-black text-orange-700 text-[10px] uppercase tracking-widest mb-2 flex items-center gap-2"><ArrowRight size={14} /> To Improve</h5>
+                                                            <p className="text-gray-700 font-semibold text-xs leading-relaxed">{session.feedback_improve || "No comment."}</p>
+                                                        </div>
+                                                        <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+                                                            <h5 className="font-black text-blue-700 text-[10px] uppercase tracking-widest mb-2 flex items-center gap-2"><Star size={14} /> Focus</h5>
+                                                            <p className="text-gray-700 font-semibold text-xs leading-relaxed">{session.feedback_focus || "General improvement areas."}</p>
+                                                        </div>
+                                                        <div className="bg-purple-50 p-4 rounded-xl border border-purple-100">
+                                                            <h5 className="font-black text-purple-700 text-[10px] uppercase tracking-widest mb-2 flex items-center gap-2"><FileText size={14} /> Next Steps</h5>
+                                                            <p className="text-gray-700 font-semibold text-xs leading-relaxed">{session.next_steps || session.nextSteps || "Continue regular practice."}</p>
                                                         </div>
                                                     </div>
-                                                ))
-                                            )}
-                                        </div>
-
-                                        {/* Message Input */}
-                                        <div className="p-4 bg-white border-t border-gray-200">
-                                            <div className="flex gap-2">
-                                                <input
-                                                    type="text"
-                                                    value={newMessage}
-                                                    onChange={(e) => setNewMessage(e.target.value)}
-                                                    onKeyPress={(e) => {
-                                                        if (e.key === 'Enter' && newMessage.trim()) {
-                                                            const msg = {
-                                                                sender: displayName,
-                                                                message: newMessage,
-                                                                timestamp: new Date().toISOString()
-                                                            };
-                                                            const allMessages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
-                                                            const studentMessages = allMessages[displayName] || [];
-                                                            const updatedStudentMessages = [...studentMessages, msg];
-                                                            const updatedAllMessages = { ...allMessages, [displayName]: updatedStudentMessages };
-                                                            setChatMessages(updatedStudentMessages);
-                                                            localStorage.setItem('chat_messages_v2', JSON.stringify(updatedAllMessages));
-                                                            setNewMessage('');
-                                                        }
-                                                    }}
-                                                    placeholder="Type your message..."
-                                                    className="flex-1 px-4 py-3 rounded-xl border border-gray-200 focus:border-teal-500 outline-none"
-                                                />
-                                                <button
-                                                    onClick={() => {
-                                                        if (newMessage.trim()) {
-                                                            const msg = {
-                                                                sender: displayName,
-                                                                message: newMessage,
-                                                                timestamp: new Date().toISOString()
-                                                            };
-                                                            const allMessages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
-                                                            const studentMessages = allMessages[displayName] || [];
-                                                            const updatedStudentMessages = [...studentMessages, msg];
-                                                            const updatedAllMessages = { ...allMessages, [displayName]: updatedStudentMessages };
-                                                            setChatMessages(updatedStudentMessages);
-                                                            localStorage.setItem('chat_messages_v2', JSON.stringify(updatedAllMessages));
-                                                            setNewMessage('');
-                                                        }
-                                                    }}
-                                                    className="bg-teal-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-teal-700 transition-all"
-                                                >
-                                                    Send
-                                                </button>
+                                                </div>
                                             </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {activeTab === 'invoices' && (
+                            <div className="space-y-6">
+                                <h2 className="text-xl font-black text-gray-900 tracking-tight flex items-center gap-3"><CreditCard className="text-teal-600" size={24} /> Invoices & Billing</h2>
+                                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-left">
+                                            <thead className="bg-gray-50/50 border-b border-gray-100">
+                                                <tr>
+                                                    <th className="p-4 font-black text-gray-400 text-[9px] uppercase tracking-widest">Date</th>
+                                                    <th className="p-4 font-black text-gray-400 text-[9px] uppercase tracking-widest">Description</th>
+                                                    <th className="p-4 font-black text-gray-400 text-[9px] uppercase tracking-widest">Amount</th>
+                                                    <th className="p-4 font-black text-gray-400 text-[9px] uppercase tracking-widest">Status</th>
+                                                    <th className="p-4 font-black text-gray-400 text-[9px] uppercase tracking-widest text-right">Action</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-50">
+                                                {[...bookings, ...history].sort((a, b) => new Date(b.date) - new Date(a.date)).map((item, idx) => (
+                                                    <tr key={idx} className="hover:bg-gray-50/50 transition-colors">
+                                                        <td className="p-4"><div className="font-bold text-gray-900 text-xs">{new Date(item.date).toLocaleDateString('en-GB')}</div></td>
+                                                        <td className="p-4"><div className="font-bold text-gray-600 text-xs">{item.subject || item.topic || "Tutoring Session"}</div></td>
+                                                        <td className="p-4 font-black text-gray-900 text-sm">£{item.cost || 30}</td>
+                                                        <td className="p-4"><span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border ${item.paymentStatus === 'Paid' ? 'bg-green-100 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-100'}`}>{item.paymentStatus || 'Due'}</span></td>
+                                                        <td className="p-4 text-right">
+                                                            {item.paymentStatus !== 'Paid' ? (
+                                                                <button onClick={() => handlePay(item)} className="text-[10px] font-black text-teal-600 underline uppercase tracking-widest">Pay via Stripe</button>
+                                                            ) : (
+                                                                <button onClick={() => setReceiptTarget(item)} className="text-[10px] font-black text-gray-400 underline uppercase tracking-widest">Receipt</button>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'messages' && (
+                            <div className="space-y-6">
+                                <h2 className="text-xl font-black text-gray-900 tracking-tight flex items-center gap-3"><MessageSquare className="text-teal-500" size={24} /> Messaging</h2>
+                                <div className="bg-white rounded-3xl border border-gray-100 shadow-lg overflow-hidden flex flex-col" style={{ height: '600px' }}>
+                                    <div className="p-6 bg-teal-500 text-white flex items-center gap-3 shadow-md">
+                                        <div className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-xl flex items-center justify-center font-black text-lg">D</div>
+                                        <div>
+                                            <div className="font-black text-lg leading-none">Davina (Your Tutor)</div>
+                                            <div className="text-teal-100 text-[10px] font-bold uppercase tracking-widest mt-1">Direct Message Channel</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50/30">
+                                        {chatMessages.length === 0 ? (
+                                            <div className="h-full flex items-center justify-center text-gray-300 font-black uppercase tracking-[0.2em] italic text-xs">No messages yet. Say hello!</div>
+                                        ) : (
+                                            chatMessages.map((msg, idx) => (
+                                                <div key={idx} className={`flex ${msg.sender === displayName ? 'justify-end' : 'justify-start'}`}>
+                                                    <div className={`max-w-[80%] p-4 rounded-2xl shadow-sm ${msg.sender === displayName ? 'bg-teal-600 text-white rounded-br-md' : 'bg-white border border-gray-100 text-gray-800 rounded-bl-md'}`}>
+                                                        <p className="text-sm font-bold leading-relaxed">{msg.message}</p>
+                                                        <div className={`text-[9px] mt-2 font-black uppercase opacity-60`}>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                    <div className="p-6 bg-white border-t border-gray-100">
+                                        <div className="flex gap-3">
+                                            <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()} placeholder="Type a message..." className="flex-1 px-5 py-3 rounded-xl border-2 border-gray-50 bg-gray-50 focus:bg-white focus:border-teal-500 transition-all font-bold text-sm" />
+                                            <button onClick={handleSendMessage} className="bg-teal-500 text-white px-6 rounded-xl font-black uppercase tracking-widest text-xs transition-all shadow-md active:scale-95">Send</button>
                                         </div>
                                     </div>
                                 </div>
-                            )
-                        }
-
-                    </div >
-                </div >
-            </main >
-
-            {/* Booking Modal */}
-            {
-                showBookingModal && selectedSlot && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
-                        <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
-                            <div className="bg-teal-600 p-6 text-white">
-                                <h3 className="text-2xl font-bold mb-1">{rescheduleTarget ? 'Confirm Reschedule' : 'Book Your Lesson'}</h3>
-                                <p className="text-teal-100 text-sm">
-                                    {new Date(selectedSlot.date).toLocaleDateString()} at {selectedSlot.time}
-                                </p>
                             </div>
-                            <div className="p-6 space-y-4">
-                                {rescheduleTarget && (
-                                    <div className="bg-purple-50 p-4 rounded-xl border border-purple-100 mb-4">
-                                        <h4 className="font-bold text-purple-800 text-sm mb-1">Rescheduling From:</h4>
-                                        <p className="text-gray-600 text-sm">{new Date(rescheduleTarget.date).toLocaleDateString()} at {rescheduleTarget.time}</p>
-                                    </div>
-                                )}
-                                <div>
-                                    <label className="block text-gray-700 font-bold mb-2">
-                                        What would you like to cover in this lesson?
-                                    </label>
-                                    <textarea
-                                        value={bookingSubject}
-                                        onChange={(e) => setBookingSubject(e.target.value)}
-                                        placeholder="E.g., Algebra, Essay Writing, etc."
-                                        className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-                                        rows="3"
-                                        autoFocus
-                                    />
-                                </div>
-
-                                {!rescheduleTarget && (
-                                    <div className="flex items-center gap-2 bg-purple-50 p-3 rounded-lg border border-purple-100 mb-2">
-                                        <input
-                                            type="checkbox"
-                                            id="bookTenWeeks"
-                                            checked={bookTenWeeks}
-                                            onChange={(e) => setBookTenWeeks(e.target.checked)}
-                                            className="w-5 h-5 text-purple-600 rounded focus:ring-purple-500 cursor-pointer"
-                                        />
-                                        <label htmlFor="bookTenWeeks" className="text-sm font-bold text-gray-700 cursor-pointer select-none">
-                                            Book this time for 10 weeks
-                                        </label>
-                                    </div>
-                                )}
-
-                                <div className="flex gap-3">
-                                    <button
-                                        onClick={() => {
-                                            setShowBookingModal(false);
-                                            setBookingSubject('');
-                                            setSelectedSlot(null);
-                                        }}
-                                        className="flex-1 py-3 text-gray-600 font-bold hover:text-gray-800 transition-colors"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        onClick={confirmBooking}
-                                        className="flex-1 bg-teal-600 text-white py-3 rounded-lg font-bold hover:bg-teal-700 transition-all shadow-md"
-                                    >
-                                        Confirm {rescheduleTarget ? 'Reschedule' : 'Booking'}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
+                        )}
                     </div>
-                )
-            }
+                </div>
+            </main>
 
-            {/* Reschedule Info Modal */}
-            {
-                showRescheduleModal && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setShowRescheduleModal(false)}>
-                        <div className="bg-white p-8 rounded-3xl shadow-xl max-w-sm w-full animate-in zoom-in-95 text-center" onClick={e => e.stopPropagation()}>
-                            <div className="w-16 h-16 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center mx-auto mb-6">
-                                <Clock size={32} />
-                            </div>
-                            <h3 className="text-2xl font-bold text-gray-900 mb-2">Reschedule Lesson</h3>
-                            <p className="text-gray-500 mb-8">
-                                Please select a new available time slot from the calendar for your lesson on <strong>{rescheduleTarget && new Date(rescheduleTarget.date).toLocaleDateString()}</strong>.
-                            </p>
-                            <button
-                                onClick={confirmRescheduleStart}
-                                className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 transition-all shadow-md"
-                            >
-                                Select New Time
-                            </button>
+            {/* Modals */}
+            {showBookingModal && selectedSlot && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-y-auto max-h-[90vh] animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                        <div className="bg-teal-600 p-6 text-white relative">
+                            <h3 className="text-xl font-black mb-1">{rescheduleTarget ? 'Confirm Reschedule' : 'Secure Your Lesson'}</h3>
+                            <p className="text-teal-100 font-bold opacity-80 uppercase tracking-widest text-[10px]">{new Date(selectedSlot.date).toLocaleDateString('en-GB', { weekday: 'long', month: 'long', day: 'numeric' })} at {selectedSlot.time}</p>
+                            {!rescheduleTarget && <div className="absolute top-6 right-6 font-black text-2xl">£{hourlyRate}</div>}
                         </div>
-                    </div>
-                )
-            }
-
-            {/* Notification Modal */}
-            {
-                notification && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setNotification(null)}>
-                        <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 text-center max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                            <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${notification.type === 'error' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
-                                {notification.type === 'error' ? <AlertCircle size={24} /> : <CheckCircle size={24} />}
-                            </div>
-                            <p className="text-gray-800 font-bold mb-6 text-lg">{notification.message}</p>
-                            <button
-                                onClick={() => setNotification(null)}
-                                className="w-full py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all"
-                            >
-                                Okay
-                            </button>
-                        </div>
-                    </div>
-                )
-            }
-
-            {/* Confirmation Modal */}
-            {
-                confirmation && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
-                        <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-                            <h3 className="text-xl font-bold text-gray-900 mb-4">Confirmation Required</h3>
-                            <p className="text-gray-600 mb-8 whitespace-pre-wrap">{confirmation.message}</p>
-                            <div className="flex gap-3">
-                                <button
-                                    onClick={confirmation.onCancel}
-                                    className="flex-1 py-3 text-gray-600 font-bold hover:bg-gray-50 rounded-xl transition-all"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={confirmation.onConfirm}
-                                    className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 shadow-md transition-all"
-                                >
-                                    Confirm
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )
-            }
-
-            {/* Payment Modal (Stripe Style) */}
-            {
-                paymentTarget && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
-                        <div className="bg-white p-0 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-                            <div className="bg-gray-50 p-6 border-b border-gray-100 flex justify-between items-center">
-                                <div className="flex items-center gap-2">
-                                    <CreditCard className="text-teal-600" />
-                                    <span className="font-bold text-gray-900">Secure Payment via Stripe</span>
+                        <div className="p-6 space-y-4">
+                            {rescheduleTarget && (
+                                <div className="bg-purple-50 p-4 rounded-xl border border-purple-100">
+                                    <h4 className="font-black text-purple-800 text-[10px] uppercase tracking-widest mb-1">Current Lesson:</h4>
+                                    <p className="text-gray-600 font-bold text-sm">{new Date(rescheduleTarget.date).toLocaleDateString('en-GB')} at {rescheduleTarget.time}</p>
                                 </div>
-                                <button onClick={() => setPaymentTarget(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+                            )}
+                            <div>
+                                <label className="block text-gray-400 font-black uppercase tracking-widest text-[9px] mb-2 ml-1">What would you like to cover?</label>
+                                <textarea value={bookingSubject} onChange={(e) => setBookingSubject(e.target.value)} placeholder="E.g. Quadratic Equations..." className="w-full border border-gray-200 rounded-xl p-4 focus:border-teal-500 transition-all font-bold text-sm min-h-[100px] bg-gray-50" />
                             </div>
-
-                            <div className="p-8">
-                                <div className="text-center mb-6">
-                                    <div className="text-gray-500 text-sm uppercase font-bold tracking-wider mb-1">Total Amount</div>
-                                    <div className="text-4xl font-bold text-gray-900">£{paymentTarget.cost || 30}.00</div>
-                                    <div className="text-sm text-gray-500 mt-2">
-                                        {paymentTarget.cost === 280 ? '10-Lesson Bulk Block' : `Session on ${new Date(paymentTarget.date).toLocaleDateString()}`}
-                                    </div>
-                                </div>
-
-                                <div className="space-y-3 mb-6">
-                                    <div className="text-xs font-bold text-gray-400 uppercase text-center mb-2">Secure Stripe Link</div>
-                                    {paymentTarget.cost === 280 ? (
-                                        <a
-                                            href="https://buy.stripe.com/eVqbJ1bUX1qnbVcdujeIw01"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="block w-full py-4 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 transition-all shadow-lg flex items-center justify-center gap-2 text-center"
+                            {!rescheduleTarget && (
+                                <div className="space-y-3">
+                                    <div className="bg-teal-50 p-4 rounded-xl border border-teal-100 flex items-center justify-between">
+                                        <div>
+                                            <p className="font-black text-teal-800 text-[10px] uppercase tracking-widest">Recurring Lesson?</p>
+                                            <p className="text-gray-500 text-[10px] font-bold">Secure this slot weekly</p>
+                                        </div>
+                                        <button
+                                            onClick={() => setIsRecurring(!isRecurring)}
+                                            className={`px-4 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all border-2 ${isRecurring
+                                                ? 'bg-teal-600 border-teal-600 text-white shadow-md'
+                                                : 'bg-white border-gray-200 text-gray-400 hover:border-teal-500 hover:text-teal-500'
+                                                }`}
                                         >
-                                            Complete £280 Payment <ArrowRight size={18} />
-                                        </a>
-                                    ) : (
-                                        <a
-                                            href="https://buy.stripe.com/14A3cv5wzglh1gyai7eIw00"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="block w-full py-4 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 transition-all shadow-lg flex items-center justify-center gap-2 text-center"
-                                        >
-                                            Complete £30 Payment <ArrowRight size={18} />
-                                        </a>
+                                            {isRecurring ? 'Active' : 'Enable'}
+                                        </button>
+                                    </div>
+
+                                    {isRecurring && (
+                                        <div className="bg-white p-4 rounded-xl border border-gray-100 animate-in slide-in-from-top-2">
+                                            <label className="block text-gray-400 font-black uppercase tracking-widest text-[9px] mb-2 ml-1">Number of Weeks</label>
+                                            <input
+                                                type="number"
+                                                min="2"
+                                                max="12"
+                                                id="recurringWeeks"
+                                                defaultValue="4"
+                                                className="w-full border border-gray-200 rounded-lg px-3 py-2 font-bold text-sm bg-gray-50 focus:border-teal-500 focus:outline-none"
+                                            />
+                                            <p className="text-[9px] text-gray-400 mt-1 italic">Maximum 12 weeks</p>
+                                        </div>
                                     )}
                                 </div>
-
-                                <div className="bg-orange-50 p-4 rounded-xl border border-orange-100 text-center">
-                                    <p className="text-sm text-orange-800 font-bold mb-3">Completed your payment on Stripe?</p>
-                                    <button
-                                        onClick={() => {
-                                            markAsPaid(paymentTarget.id);
-                                            setPaymentTarget(null);
-                                            setNotification({ type: 'success', message: "Payment Recorded! Thank you." });
-                                        }}
-                                        className="w-full py-3 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 transition-all"
-                                    >
-                                        Yes, Mark as Paid
-                                    </button>
-                                </div>
-
-                                <div className="flex justify-center gap-4 mt-6 opacity-30 grayscale">
-                                    <span className="text-xs font-bold">Powered by Stripe</span>
-                                </div>
+                            )}
+                            <div className="flex gap-3">
+                                <button onClick={() => setShowBookingModal(false)} className="flex-1 py-3 text-gray-400 font-black uppercase tracking-widest text-xs">Cancel</button>
+                                <button onClick={confirmBooking} className="flex-[2] bg-teal-600 text-white py-3 rounded-xl font-black shadow-lg uppercase tracking-widest text-xs">Confirm {rescheduleTarget ? 'Change' : 'Booking'}</button>
                             </div>
                         </div>
                     </div>
-                )
-            }
+                </div>
+            )}
 
-            {/* Edit Note Modal */}
-            {
-                editNoteTarget && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
-                        <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                            <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-                                <FileText size={20} className="text-teal-600" /> Lesson Focus
-                            </h3>
-                            <p className="text-gray-500 text-sm mb-4">
-                                What would you like to cover in this session?
-                            </p>
-
-                            <form onSubmit={handleSaveNote}>
-                                <textarea
-                                    value={editNoteTarget.currentNote}
-                                    onChange={e => setEditNoteTarget({ ...editNoteTarget, currentNote: e.target.value })}
-                                    className="w-full border border-gray-200 rounded-xl p-4 min-h-[120px] outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100 transition-all resize-none mb-4"
-                                    placeholder="E.g. Algebra quadratic equations, Essay structure..."
-                                    autoFocus
-                                />
-
-                                <div className="flex gap-3">
-                                    <button
-                                        type="button"
-                                        onClick={() => setEditNoteTarget(null)}
-                                        className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-50 rounded-xl transition-all"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        type="submit"
-                                        className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 shadow-md transition-all"
-                                    >
-                                        Save Note
-                                    </button>
-                                </div>
-                            </form>
+            {editNoteTarget && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+                    <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-lg w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+                        <h3 className="text-xl font-black tracking-tight mb-4 text-gray-900">Lesson Notes</h3>
+                        <textarea value={editNoteTarget.currentNote} onChange={e => setEditNoteTarget({ ...editNoteTarget, currentNote: e.target.value })} className="w-full border-2 border-gray-50 rounded-2xl p-6 min-h-[160px] font-bold text-lg text-gray-800 bg-gray-50 mb-6" placeholder="Type your notes here..." />
+                        <div className="flex gap-4">
+                            <button onClick={() => setEditNoteTarget(null)} className="flex-1 py-4 text-gray-400 font-black uppercase tracking-widest text-xs">Discard</button>
+                            <button onClick={handleSaveNote} className="flex-[2] py-4 bg-teal-600 text-white rounded-2xl font-black shadow-lg uppercase tracking-widest text-xs">Save Notes</button>
                         </div>
                     </div>
-                )
-            }
+                </div>
+            )}
 
-            {/* Receipt Modal */}
-            {
-                receiptTarget && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
-                        <div className="bg-white p-0 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-                            <div className="bg-gradient-to-r from-teal-500 to-teal-600 p-6 text-white">
-                                <div className="flex justify-between items-start">
-                                    <div>
-                                        <h3 className="text-2xl font-bold mb-1">Payment Receipt</h3>
-                                        <p className="text-teal-100 text-sm">Davina's Tutoring Platform</p>
-                                    </div>
-                                    <button onClick={() => setReceiptTarget(null)} className="text-white/80 hover:text-white text-2xl">×</button>
-                                </div>
-                            </div>
-
-                            <div className="p-8">
-                                <div className="space-y-4 mb-6">
-                                    <div className="flex justify-between py-2 border-b border-gray-100">
-                                        <span className="text-gray-500 text-sm">Receipt #</span>
-                                        <span className="font-mono font-bold text-gray-900">{receiptTarget.id?.slice(0, 8) || 'N/A'}</span>
-                                    </div>
-                                    <div className="flex justify-between py-2 border-b border-gray-100">
-                                        <span className="text-gray-500 text-sm">Date</span>
-                                        <span className="font-bold text-gray-900">{new Date(receiptTarget.date).toLocaleDateString()}</span>
-                                    </div>
-                                    <div className="flex justify-between py-2 border-b border-gray-100">
-                                        <span className="text-gray-500 text-sm">Student</span>
-                                        <span className="font-bold text-gray-900">{displayName}</span>
-                                    </div>
-                                    <div className="flex justify-between py-2 border-b border-gray-100">
-                                        <span className="text-gray-500 text-sm">Description</span>
-                                        <span className="font-bold text-gray-900">{receiptTarget.subject || receiptTarget.topic || 'Tutoring Session'}</span>
-                                    </div>
-                                    <div className="flex justify-between py-3 bg-teal-50 px-4 rounded-xl mt-4">
-                                        <span className="text-gray-700 font-bold">Amount Paid</span>
-                                        <span className="text-2xl font-bold text-teal-600">£{receiptTarget.cost || 30}.00</span>
-                                    </div>
-                                </div>
-
-                                <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center gap-3 mb-6">
-                                    <CheckCircle className="text-green-600" size={24} />
-                                    <div>
-                                        <div className="font-bold text-green-900">Payment Confirmed</div>
-                                        <div className="text-xs text-green-700">Thank you for your payment!</div>
-                                    </div>
-                                </div>
-
-                                <button
-                                    onClick={() => setReceiptTarget(null)}
-                                    className="w-full py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all"
-                                >
-                                    Close
+            {showReviewModal && reviewTarget && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+                    <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full text-center max-h-[90vh] overflow-y-auto">
+                        <h3 className="text-2xl font-black tracking-tight mb-6">How was your lesson?</h3>
+                        <div className="flex justify-center gap-1 mb-6">
+                            {[1, 2, 3, 4, 5].map((star) => (
+                                <button key={star} onClick={() => setReviewRating(star)} className={`p-1 transition-all ${reviewRating >= star ? 'text-yellow-400' : 'text-gray-200'}`}>
+                                    <Star size={32} fill="currentColor" />
                                 </button>
-                            </div>
+                            ))}
+                        </div>
+                        <textarea value={reviewComment} onChange={(e) => setReviewComment(e.target.value)} placeholder="Describe your experience..." className="w-full border border-gray-200 bg-gray-50 rounded-2xl p-5 min-h-[120px] mb-6 font-bold text-sm" />
+                        <button onClick={submitReview} disabled={!reviewRating} className="w-full py-4 bg-yellow-400 text-gray-900 rounded-2xl font-black disabled:opacity-30 uppercase tracking-widest text-sm shadow-lg">Submit Review</button>
+                    </div>
+                </div>
+            )}
+
+            {notification && (
+                <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] animate-in slide-in-from-bottom-10">
+                    <div className={`px-8 py-4 rounded-full shadow-2xl flex items-center gap-3 border-2 ${notification.type === 'error' ? 'bg-red-500 border-red-400 text-white' : 'bg-teal-600 border-teal-500 text-white'}`}>
+                        {notification.type === 'error' ? <AlertCircle size={20} /> : <CheckCircle size={20} />}
+                        <span className="font-black text-sm tracking-tight">{notification.message}</span>
+                        <button onClick={() => setNotification(null)} className="ml-2 opacity-50 text-xl">×</button>
+                    </div>
+                </div>
+            )}
+
+            {paymentTarget && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[150] flex items-center justify-center p-4">
+                    <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full overflow-y-auto max-h-[90vh] text-center p-8">
+                        <h3 className="text-2xl font-black mb-6">Make Payment</h3>
+                        <div className="bg-gray-50 p-6 rounded-2xl mb-6">
+                            <div className="text-3xl font-black text-gray-900">£{paymentTarget.cost || 30}.00</div>
+                        </div>
+                        <a href={paymentTarget.cost === 280 ? "https://buy.stripe.com/eVqbJ1bUX1qnbVcdujeIw01" : "https://buy.stripe.com/14A3cv5wzglh1gyai7eIw00"} target="_blank" rel="noopener noreferrer" className="block w-full py-4 bg-teal-600 text-white rounded-2xl font-black shadow-lg uppercase tracking-widest text-xs">Pay via Stripe</a>
+                        <button onClick={() => { markAsPaid(paymentTarget.id); setPaymentTarget(null); setNotification({ type: 'success', message: 'Payment recorded!' }); }} className="w-full py-3 text-gray-400 font-black uppercase tracking-widest text-[9px] mt-4">Mark Paid Manually</button>
+                        <button onClick={() => setPaymentTarget(null)} className="text-gray-400 font-black uppercase tracking-widest text-[9px] mt-4 block mx-auto">Cancel</button>
+                    </div>
+                </div>
+            )}
+
+            {receiptTarget && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[150] flex items-center justify-center p-4">
+                    <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full p-8 max-h-[90vh] overflow-y-auto">
+                        <h3 className="text-2xl font-black mb-6 text-center">Receipt</h3>
+                        <div className="space-y-3 border-t border-b border-dashed border-gray-200 py-4 mb-6 text-center">
+                            <div className="flex justify-between font-bold text-sm"><span className="text-gray-400 uppercase text-[9px]">Date</span><span>{new Date(receiptTarget.date).toLocaleDateString('en-GB')}</span></div>
+                            <div className="flex justify-between font-bold text-sm"><span className="text-gray-400 uppercase text-[9px]">Lesson</span><span>{receiptTarget.subject || "Session"}</span></div>
+                            <div className="flex justify-between font-black text-lg"><span className="text-gray-400 uppercase text-[9px] font-bold">Amount</span><span className="text-teal-600">£{receiptTarget.cost || 30}.00</span></div>
+                        </div>
+                        <button onClick={() => setReceiptTarget(null)} className="w-full py-4 bg-gray-900 text-white rounded-2xl font-black uppercase tracking-widest text-xs">Close</button>
+                    </div>
+                </div>
+            )}
+
+            {cancelTarget && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[150] flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-8 text-center max-h-[90vh] overflow-y-auto">
+                        <Trash2 className="mx-auto text-red-500 mb-4" size={40} />
+                        <h3 className="text-xl font-black mb-2">Cancel Lesson?</h3>
+                        <p className="text-gray-500 mb-6 font-bold text-sm">Are you sure you want to cancel your session on {new Date(cancelTarget.date).toLocaleDateString('en-GB')} at {cancelTarget.time}?</p>
+                        <div className="flex gap-3">
+                            <button onClick={() => setCancelTarget(null)} className="flex-1 py-3 text-gray-400 font-black uppercase tracking-widest text-xs">Back</button>
+                            <button onClick={() => handleConfirmCancellation()} className="flex-1 py-3 bg-red-500 text-white rounded-xl font-black shadow-lg uppercase tracking-widest text-xs">Cancel Session</button>
                         </div>
                     </div>
-                )
-            }
-
-            {/* Cancel Booking Modal */}
-            {
-                cancelTarget && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
-                        <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-                            <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
-                                <Trash2 size={24} />
-                            </div>
-                            <h3 className="text-xl font-bold text-gray-900 mb-2">Cancel Lesson</h3>
-                            <p className="text-gray-600 mb-6">
-                                Are you sure you want to cancel your lesson on <strong>{new Date(cancelTarget.date).toLocaleDateString()}</strong> at {cancelTarget.time}?
-                                {cancelTarget.recurringId && " This is part of a recurring series."}
-                            </p>
-
-                            <div className="flex flex-col gap-3">
-                                {cancelTarget.recurringId ? (
-                                    <>
-                                        <button
-                                            onClick={() => handleConfirmCancellation(false)}
-                                            className="w-full py-3 bg-white border-2 border-red-500 text-red-600 rounded-xl font-bold hover:bg-red-50 transition-all"
-                                        >
-                                            Cancel Just This Lesson
-                                        </button>
-                                        <button
-                                            onClick={() => handleConfirmCancellation(true)}
-                                            className="w-full py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-md transition-all"
-                                        >
-                                            Cancel Entire Series
-                                        </button>
-                                    </>
-                                ) : (
-                                    <button
-                                        onClick={() => handleConfirmCancellation(false)}
-                                        className="w-full py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-md transition-all"
-                                    >
-                                        Confirm Cancellation
-                                    </button>
-                                )}
-                                <button
-                                    onClick={() => setCancelTarget(null)}
-                                    className="w-full py-3 text-gray-500 font-bold hover:bg-gray-50 rounded-xl transition-all"
-                                >
-                                    Keep Lesson
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )
-            }
-        </div >
+                </div>
+            )}
+        </div>
     );
 };
 

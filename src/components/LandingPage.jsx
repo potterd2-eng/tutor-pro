@@ -11,6 +11,162 @@ import profilePic from '../assets/profile.jpg'; // Import profile picture
 import { emailService } from '../utils/email';
 import { generateGoogleCalendarUrl } from '../utils/calendar';
 
+const formatName = (name) => {
+    if (!name) return '';
+    return name.trim().split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+};
+
+const BookingGrid = ({ onBook }) => {
+    const [availableSlots, setAvailableSlots] = useState([]);
+    const [selectedDay, setSelectedDay] = useState(null);
+    const [selectedSlot, setSelectedSlot] = useState(null);
+    const [showBookingModal, setShowBookingModal] = useState(false);
+    const [bookingName, setBookingName] = useState('');
+    const [studentName, setStudentName] = useState('');
+    const [bookingEmail, setBookingEmail] = useState('');
+    const [bookingSubject, setBookingSubject] = useState('');
+    const [gdprConsent, setGdprConsent] = useState(false);
+    const [bookingFor, setBookingFor] = useState('pupil');
+    const [studentAge, setStudentAge] = useState(null);
+    const [isParent, setIsParent] = useState(null);
+    const [parentEmail, setParentEmail] = useState('');
+    const [confirmationData, setConfirmationData] = useState(null);
+
+    useEffect(() => {
+        const loadSlots = () => {
+            const bookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+            const customSlots = JSON.parse(localStorage.getItem('tutor_available_slots') || '[]');
+
+            let allInitialSlots = [];
+            
+            // If custom slots exist, use them. OTHERWISE use the base hardcoded slots.
+            if (customSlots && customSlots.length > 0) {
+                allInitialSlots = customSlots;
+            } else {
+                 const baseSlots = [
+                    { id: 'b1', date: '2026-02-16', time: '16:00' },
+                    { id: 'b2', date: '2026-02-16', time: '17:00' },
+                    { id: 'b3', date: '2026-02-17', time: '16:00' },
+                    { id: 'b4', date: '2026-02-18', time: '15:30' },
+                    { id: 'b5', date: '2026-02-19', time: '17:00' }
+                ];
+                allInitialSlots = baseSlots;
+            }
+
+            const finalSlots = allInitialSlots.filter(slot => !bookings.some(b => b.date === slot.date && b.time === slot.time));
+            setAvailableSlots(finalSlots);
+        };
+        loadSlots();
+        window.addEventListener('storage', loadSlots);
+        return () => window.removeEventListener('storage', loadSlots);
+    }, []);
+
+    const slotsByDate = availableSlots.reduce((acc, slot) => {
+        if (!acc[slot.date]) acc[slot.date] = [];
+        acc[slot.date].push(slot);
+        return acc;
+    }, {});
+
+    const sortedDates = Object.keys(slotsByDate).sort();
+
+    const confirmBooking = (e) => {
+        e.preventDefault();
+        if (!selectedSlot || !bookingName || !bookingEmail || !bookingSubject || !gdprConsent) return;
+
+        const bookingDetails = {
+            date: selectedSlot.date,
+            time: selectedSlot.time,
+            name: bookingName,
+            email: bookingEmail,
+            subject: bookingSubject,
+            gdprConsent
+        };
+
+        if (onBook) {
+            console.log('BookingGrid: Calling onBook with details:', bookingDetails);
+            onBook(bookingDetails);
+            setShowBookingModal(false);
+            setBookingName(''); setStudentName(''); setBookingEmail(''); setBookingSubject(''); setGdprConsent(false);
+        } else {
+            console.error('BookingGrid: onBook prop is missing!');
+        }
+    };
+
+    if (availableSlots.length === 0) {
+        return (
+            <div className="text-center py-12 text-gray-500">
+                <Calendar size={48} className="mx-auto mb-4 opacity-50" />
+                <p>No available slots found for the next 30 days.</p>
+            </div>
+        );
+    }
+
+    return (
+        <div className="flex flex-col md:flex-row gap-8 min-h-[500px]">
+            <div className="md:w-1/3 overflow-y-auto pr-2">
+                <h3 className="font-bold text-gray-400 uppercase text-xs mb-3">Select Date</h3>
+                <div className="space-y-2">
+                    {sortedDates.map(date => (
+                        <button key={date} onClick={() => setSelectedDay(date)} className={`w-full p-4 rounded-xl text-left border-2 ${selectedDay === date ? 'border-purple-600 bg-purple-50' : 'border-white bg-white'}`}>
+                            <div className="font-bold text-sm uppercase text-gray-400">{new Date(date).toLocaleDateString('en-GB', { weekday: 'long' })}</div>
+                            <div className="font-extrabold text-xl text-gray-800">{new Date(date).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })}</div>
+                        </button>
+                    ))}
+                </div>
+            </div>
+            <div className="md:w-2/3 bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                {selectedDay ? (
+                    <div className="grid grid-cols-3 gap-3">
+                        {slotsByDate[selectedDay].map(slot => (
+                            <button key={slot.id} onClick={() => { setSelectedSlot(slot); setShowBookingModal(true); }} className="py-2 px-1 rounded-lg border border-gray-200 hover:bg-purple-600 hover:text-white transition-all text-sm font-bold">
+                                {slot.time}
+                            </button>
+                        ))}
+                    </div>
+                ) : <div className="h-full flex items-center justify-center text-gray-300">Select a date</div>}
+            </div>
+
+            {showBookingModal && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+                    <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+                        <h2 className="text-2xl font-bold mb-6">Confirm Consultation</h2>
+                        <form onSubmit={confirmBooking} className="space-y-4">
+                            <input required type="text" value={bookingName} onChange={e => setBookingName(e.target.value)} placeholder="Your Name" className="w-full px-4 py-3 rounded-xl border" />
+                            <input required type="email" value={bookingEmail} onChange={e => setBookingEmail(e.target.value)} placeholder="Email" className="w-full px-4 py-3 rounded-xl border" />
+                            <select required value={bookingSubject} onChange={e => setBookingSubject(e.target.value)} className="w-full px-4 py-3 rounded-xl border">
+                                <option value="">Select Subject</option>
+                                <option value="Maths KS3">Maths KS3</option>
+                                <option value="Maths GCSE">Maths GCSE</option>
+                                <option value="Sociology GCSE">Sociology GCSE</option>
+                                <option value="Sociology A Level">Sociology A Level</option>
+                            </select>
+                            <label className="flex items-start gap-3 text-xs">
+                                <input type="checkbox" required checked={gdprConsent} onChange={e => setGdprConsent(e.target.checked)} className="mt-1" />
+                                <span>I agree to the Terms and Privacy Policy.</span>
+                            </label>
+                            <div className="flex gap-3">
+                                <button type="button" onClick={() => setShowBookingModal(false)} className="flex-1 py-3 text-gray-500 font-bold">Cancel</button>
+                                <button type="submit" className="flex-1 py-3 bg-purple-600 text-white rounded-xl font-bold">Confirm</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {confirmationData && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
+                    <div className="bg-white p-8 rounded-3xl text-center max-w-md w-full">
+                        <CheckCircle className="text-green-600 mx-auto mb-4" size={48} />
+                        <h3 className="text-2xl font-bold mb-2">Confirmed!</h3>
+                        <p className="mb-6">Session on {confirmationData.date} at {confirmationData.time}</p>
+                        <button onClick={() => setConfirmationData(null)} className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold">Close</button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 const LandingPage = () => {
     const navigate = useNavigate();
     const [openFaq, setOpenFaq] = useState(null);
@@ -19,8 +175,63 @@ const LandingPage = () => {
     const [showStudentBookingModal, setShowStudentBookingModal] = useState(false);
     const [studentModalTab, setStudentModalTab] = useState('existing'); // 'new' or 'existing'
     const [showForgotPinModal, setShowForgotPinModal] = useState(false);
+    const [showParentLoginModal, setShowParentLoginModal] = useState(false);
+    const [parentLoginStep, setParentLoginStep] = useState('email'); // 'email', 'createPin', 'enterPin'
+    const [parentEmail, setParentEmail] = useState('');
+    const [parentAccount, setParentAccount] = useState(null);
     const [notification, setNotification] = useState(null);
     const [showAllReviews, setShowAllReviews] = useState(false);
+    const [showConsultationChoiceModal, setShowConsultationChoiceModal] = useState(false);
+    const [consultationStep, setConsultationStep] = useState('initial'); // 'initial' or 'who-are-you'
+    const [selectedSubject, setSelectedSubject] = useState(null);
+    const [isUnder16, setIsUnder16] = useState(null); // null, true, or false
+    const [loginType, setLoginType] = useState('existing'); // 'new' or 'existing' for parent sign-in
+    const [pendingBooking, setPendingBooking] = useState(null);
+
+    const handleBookingRequest = (details) => {
+        console.log('LandingPage: handleBookingRequest called', details);
+        setPendingBooking(details);
+        setShowConsultationChoiceModal(true);
+        setConsultationStep('who-are-you');
+    };
+
+    const finalizeBooking = (userType, userDetails) => {
+        if (!pendingBooking) return;
+
+        const bookingId = 'consult-' + Date.now().toString(36);
+        const meetingLink = `${window.location.origin}/session/${bookingId}?host=false&name=${encodeURIComponent(userDetails.name || pendingBooking.name)}`;
+        const formattedStudentName = formatName(userDetails.name || pendingBooking.name);
+
+        const newBooking = {
+            id: bookingId,
+            date: pendingBooking.date,
+            time: pendingBooking.time,
+            student: formattedStudentName,
+            email: pendingBooking.email, // Use booking email as contact
+            subject: pendingBooking.subject,
+            bookingFor: userType, // 'student' or 'parent'
+            studentName: formattedStudentName,
+            type: 'consultation',
+            meetingLink: meetingLink,
+            bookedAt: new Date().toISOString(),
+            paymentStatus: 'Payment Due', // Default to Due if not paid
+            cost: 0, // Free consultation
+            status: 'confirmed',
+            studentId: userDetails.id, // Link to user
+            parentId: userDetails.parentId
+        };
+
+        const bookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+        bookings.push(newBooking);
+        localStorage.setItem('tutor_bookings', JSON.stringify(bookings));
+        window.dispatchEvent(new Event('storage'));
+
+        // Send email
+        emailService.sendConfirmation({ ...newBooking, link: meetingLink }).catch(err => console.error(err));
+
+        setPendingBooking(null);
+        setNotification({ type: 'success', message: 'Booking Confirmed! You can now view it in your dashboard.' });
+    };
 
     // Load Calendly Script
     useEffect(() => {
@@ -146,12 +357,9 @@ const LandingPage = () => {
                                         className="w-full px-5 py-4 text-left hover:bg-teal-50 transition-colors"
                                     >
                                         <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 bg-teal-100 rounded-full flex items-center justify-center">
-                                                <Video size={20} className="text-teal-600" />
-                                            </div>
                                             <div>
                                                 <div className="font-bold text-gray-900">Book First Lesson</div>
-                                                <div className="text-xs text-gray-500">1-hour paid session - £30</div>
+                                                <div className="text-xs text-gray-500">1-hour paid session</div>
                                             </div>
                                         </div>
                                     </button>
@@ -164,12 +372,9 @@ const LandingPage = () => {
                                         className="w-full px-5 py-4 text-left hover:bg-teal-50 transition-colors"
                                     >
                                         <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center">
-                                                <Star size={20} className="text-orange-600" />
-                                            </div>
                                             <div>
                                                 <div className="font-bold text-gray-900">Book 10 Hour Lesson Block</div>
-                                                <div className="text-xs text-gray-500">Save £20 - Total £280</div>
+                                                <div className="text-xs text-secondary-500">Discount for the 10 lesson bundle</div>
                                             </div>
                                         </div>
                                     </button>
@@ -218,7 +423,7 @@ const LandingPage = () => {
             <div className="bg-white py-12 border-y border-gray-100">
                 <div className="max-w-6xl mx-auto px-6 flex flex-wrap justify-center gap-12 text-center">
                     {[
-                        { icon: Star, label: "5-Star Reviews", val: "50+" },
+                        { icon: Star, label: "5-Star Reviews", val: "60+" },
                         { icon: Clock, label: "Tutoring Hours", val: "550+" },
                         { icon: Shield, label: "DBS Checked", val: "Verified" },
                     ].map((s, i) => (
@@ -286,6 +491,78 @@ const LandingPage = () => {
                                 <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-blue-500" /> Problem Solving & Logic</li>
                                 <li className="flex items-center gap-3 text-sm text-gray-700 font-medium"><CheckCircle size={18} className="text-blue-500" /> Grade 9-1 Targeting Strategies</li>
                             </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            {/* Pricing Details Section */}
+            <section id="pricing" className="py-20 bg-white">
+                <div className="max-w-6xl mx-auto px-6">
+                    <div className="text-center mb-16">
+                        <h2 className="text-sm font-bold text-purple-500 uppercase tracking-widest mb-2">Pricing Plans</h2>
+                        <h3 className="text-3xl font-bold text-brand-navy">Invest in Your Academic Success</h3>
+                    </div>
+
+                    <div className="grid md:grid-cols-3 gap-8">
+                        {/* KS3 */}
+                        <div className="bg-purple-600 rounded-3xl p-8 text-white shadow-xl flex flex-col transform hover:scale-105 transition-all">
+                            <h4 className="text-xl font-bold mb-2">KS3 Sessions</h4>
+                            <p className="text-purple-100 text-sm mb-6">Building strong foundations for younger learners.</p>
+                            <div className="space-y-4 mb-8">
+                                <div className="flex justify-between items-center text-sm">
+                                    <span className="text-purple-100">Single Lesson</span>
+                                    <span className="font-bold">£25.00</span>
+                                </div>
+                                <div className="flex justify-between items-center text-sm">
+                                    <div className="flex flex-col">
+                                        <span className="text-purple-100">10 Lesson Bundle</span>
+                                        <span className="text-[10px] text-teal-300 font-bold">Save £20</span>
+                                    </div>
+                                    <span className="font-bold text-teal-300">£230.00</span>
+                                </div>
+                            </div>
+                            <button onClick={() => { setSelectedSubject('KS3 Maths'); setShowConsultationChoiceModal(true); }} className="mt-auto w-full py-3 bg-white text-purple-600 rounded-xl font-bold hover:bg-gray-50 transition-colors">Get Started</button>
+                        </div>
+
+                        {/* GCSE */}
+                        <div className="bg-purple-600 rounded-3xl p-8 text-white shadow-xl flex flex-col transform md:scale-110 z-10 hover:scale-115 transition-all">
+                            <h4 className="text-xl font-bold mb-2">GCSE Sessions</h4>
+                            <p className="text-purple-100 text-sm mb-6">Targeted exam preparation and grade boosting.</p>
+                            <div className="space-y-4 mb-8">
+                                <div className="flex justify-between items-center text-sm">
+                                    <span className="text-purple-100">Single Lesson</span>
+                                    <span className="font-bold">£30.00</span>
+                                </div>
+                                <div className="flex justify-between items-center text-sm">
+                                    <div className="flex flex-col">
+                                        <span className="text-purple-100">10 Lesson Bundle</span>
+                                        <span className="text-[10px] text-teal-300 font-bold">Save £20</span>
+                                    </div>
+                                    <span className="font-bold text-teal-300">£280.00</span>
+                                </div>
+                            </div>
+                            <button onClick={() => { setSelectedSubject('GCSE Maths'); setShowConsultationChoiceModal(true); }} className="mt-auto w-full py-3 bg-white text-purple-600 rounded-xl font-bold hover:bg-gray-50 transition-colors">Get Started</button>
+                        </div>
+
+                        {/* A-Level */}
+                        <div className="bg-purple-600 rounded-3xl p-8 text-white shadow-xl flex flex-col transform hover:scale-105 transition-all">
+                            <h4 className="text-xl font-bold mb-2">A-Level Sessions</h4>
+                            <p className="text-purple-100 text-sm mb-6">In-depth analysis and expert subject mastery.</p>
+                            <div className="space-y-4 mb-8">
+                                <div className="flex justify-between items-center text-sm">
+                                    <span className="text-purple-100">Single Lesson</span>
+                                    <span className="font-bold">£40.00</span>
+                                </div>
+                                <div className="flex justify-between items-center text-sm">
+                                    <div className="flex flex-col">
+                                        <span className="text-purple-100">10 Lesson Bundle</span>
+                                        <span className="text-[10px] text-teal-300 font-bold">Save £30</span>
+                                    </div>
+                                    <span className="font-bold text-teal-300">£370.00</span>
+                                </div>
+                            </div>
+                            <button onClick={() => { setSelectedSubject('A-Level Sociology'); setShowConsultationChoiceModal(true); }} className="mt-auto w-full py-3 bg-white text-purple-600 rounded-xl font-bold hover:bg-gray-50 transition-colors">Get Started</button>
                         </div>
                     </div>
                 </div>
@@ -360,25 +637,88 @@ const LandingPage = () => {
                         {/* Hardcoded Sample Reviews + Dynamic Reviews */}
                         {[
                             {
-                                id: 'sample-1',
-                                studentName: 'James L.',
+                                id: 'rev-1',
+                                studentName: 'Linsey',
                                 rating: 5,
-                                comment: "Davina helped me move from a Grade 4 to a Grade 7 in Maths! Her explanations make everything so much clearer efficiently.",
-                                subject: "GCSE Maths"
-                            },
-                            {
-                                id: 'sample-2',
-                                studentName: 'Sarah K.',
-                                rating: 5,
-                                comment: "Sociology was a mystery to me until I started lessons here. Now I'm confident for my A-Levels. Highly recommended!",
+                                comment: "Davina has been nothing short of outstanding. She has supported my daughter in getting from a grade C to B in A level sociology in a short space of time. Davina is incredibly knowledgeable about the specification and I would highly recommend her tutoring.",
                                 subject: "A-Level Sociology"
                             },
                             {
-                                id: 'sample-3',
-                                studentName: 'Michael R.',
+                                id: 'rev-2',
+                                studentName: 'Olivia',
                                 rating: 5,
-                                comment: "The interactive whiteboard makes online lessons feel just like being in the same room. Really professional setup.",
-                                subject: "KS3 Maths"
+                                comment: "I was able to go up a full grade with Davina. She is a really knowledgeable person and very easy to learn from! Thank you so much!!",
+                                subject: "A-Level Sociology"
+                            },
+                            {
+                                id: 'rev-3',
+                                studentName: 'Abosede',
+                                rating: 5,
+                                comment: "Davina has been a fantastic tutor to my daughter. She is knowledgeable, patient, and disciplined in her teaching approach. Her guidance has significantly helped my daughter, deepening her understanding and strengthening her knowledge.",
+                                subject: "A-Level Sociology"
+                            },
+                            {
+                                id: 'rev-4',
+                                studentName: 'Laura',
+                                rating: 5,
+                                comment: "Davina has been a fantastic tutor for my daughter. She was achieving B and C grades during her assessments and mock exams. However after her sessions with Davina my daughter achieved an A* in her final A level exam. Davina really helped boost her confidence.",
+                                subject: "A-Level Sociology"
+                            },
+                            {
+                                id: 'rev-5',
+                                studentName: 'Gemma',
+                                rating: 5,
+                                comment: "Davina has been a fantastic tutor to my son. She is patient and disciplined in her lessons and really helped him expand his knowledge. Elliot feels so much more confident doing his exams.",
+                                subject: "GCSE Maths"
+                            },
+                            {
+                                id: 'rev-6',
+                                studentName: 'Ella',
+                                rating: 5,
+                                comment: "Davina has been an excellent tutor, I felt so much more confident going into my exams. She is very patient, and supportive with both knowledge and exam structure. I definitely recommend Davina.",
+                                subject: "GCSE Maths"
+                            },
+                            {
+                                id: 'rev-7',
+                                studentName: 'Kim',
+                                rating: 5,
+                                comment: "Been absolutely brilliant for my daughter and didnt think online tutoring would work but its been simple and a great help ! Would recommend Davina to any A Level student requiring help throughout their studies.",
+                                subject: "A-Level Sociology"
+                            },
+                            {
+                                id: 'rev-8',
+                                studentName: 'Sophie',
+                                rating: 5,
+                                comment: "amazing! we did a-level sociology revision and focused mainly on education as a topic. i love the layout of the lessons and how content based they are and Davina has some really great revision resources to share.",
+                                subject: "A-Level Sociology"
+                            },
+                            {
+                                id: 'rev-9',
+                                studentName: 'Parmajit',
+                                rating: 5,
+                                comment: "Best tutor ever!",
+                                subject: "A-Level Sociology"
+                            },
+                            {
+                                id: 'rev-10',
+                                studentName: 'Emma',
+                                rating: 5,
+                                comment: "Davina helped my child to improve her knowledge and focus her Sociology revision ahead of her GCSE. She has now passed and enrolled to study Sociology at A level.",
+                                subject: "GCSE Sociology"
+                            },
+                            {
+                                id: 'rev-11',
+                                studentName: 'Gioia',
+                                rating: 5,
+                                comment: "Fantastic lesson!",
+                                subject: "A-Level Sociology"
+                            },
+                            {
+                                id: 'rev-12',
+                                studentName: 'Nyah',
+                                rating: 5,
+                                comment: "so encouraging",
+                                subject: "Maths"
                             },
                             ...(JSON.parse(localStorage.getItem('tutor_public_reviews') || '[]').reverse().slice(0, 3))
                         ].slice(0, showAllReviews ? undefined : 3).map((review, i) => (
@@ -425,7 +765,7 @@ const LandingPage = () => {
 
                     {/* Custom Booking Grid */}
                     <div className="bg-white rounded-2xl shadow-xl overflow-hidden mx-auto max-w-4xl min-h-[400px] p-8">
-                        <BookingGrid />
+                        <BookingGrid onBook={handleBookingRequest} />
                     </div>
                 </div>
                 {/* Decoration */}
@@ -543,176 +883,468 @@ const LandingPage = () => {
                                 </div>
                                 <ArrowRight className="ml-auto text-gray-300 group-hover:text-teal-600" />
                             </button>
+
+                            <button
+                                onClick={() => {
+                                    setShowLoginModal(false);
+                                    setShowParentLoginModal(true);
+                                }}
+                                className="flex items-center gap-4 p-4 border-2 border-transparent hover:border-blue-500 bg-blue-50 rounded-2xl group transition-all"
+                            >
+                                <div className="bg-white p-3 rounded-xl shadow-sm group-hover:bg-blue-500 group-hover:text-white transition-colors">
+                                    <User size={24} className="text-blue-600 group-hover:text-white" />
+                                </div>
+                                <div className="text-left">
+                                    <h3 className="font-bold text-gray-900">Parent Login</h3>
+                                    <p className="text-xs text-gray-500">View your child's progress</p>
+                                </div>
+                                <ArrowRight className="ml-auto text-gray-300 group-hover:text-blue-600" />
+                            </button>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* Student Booking Modal (Auth Split) */}
+            {/* Consultation Choice Modal */}
+            {showConsultationChoiceModal && (
+                <div className="fixed inset-0 bg-brand-navy/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6" onClick={() => { setShowConsultationChoiceModal(false); setConsultationStep('initial'); }}>
+                    <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full overflow-hidden animate-in zoom-in-95 duration-300" onClick={e => e.stopPropagation()}>
+                        <div className="p-8 text-center">
+                            {consultationStep === 'initial' ? (
+                                <>
+                                    <div className="w-16 h-16 bg-purple-100 rounded-2xl flex items-center justify-center text-purple-600 mx-auto mb-6">
+                                        <GraduationCap size={32} />
+                                    </div>
+                                    <h3 className="text-2xl font-bold text-gray-900 mb-2">Ready to Start?</h3>
+                                    <p className="text-gray-500 mb-8">Choose how you'd like to begin your learning journey.</p>
+
+                                    <div className="space-y-3">
+                                        <button
+                                            onClick={() => {
+                                                setShowConsultationChoiceModal(false);
+                                                scrollToSection('booking');
+                                            }}
+                                            className="w-full py-4 px-4 bg-white border-2 border-purple-100 hover:border-purple-600 rounded-2xl flex items-center gap-4 transition-all group text-left shadow-sm hover:shadow-md"
+                                        >
+                                            <div className="w-12 h-12 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center shrink-0">
+                                                <Clock size={24} />
+                                            </div>
+                                            <div className="flex-1">
+                                                <div className="font-bold text-gray-900 group-hover:text-purple-700">Free Consultation</div>
+                                                <div className="text-xs text-gray-500">15-minute intro session</div>
+                                            </div>
+                                            <ChevronRight size={20} className="text-gray-300 group-hover:text-purple-600" />
+                                        </button>
+
+                                        <button
+                                            onClick={() => setConsultationStep('who-are-you')}
+                                            className="w-full py-4 px-4 bg-white border-2 border-teal-100 hover:border-teal-500 rounded-2xl flex items-center gap-4 transition-all group text-left shadow-sm hover:shadow-md"
+                                        >
+                                            <div className="w-12 h-12 bg-teal-100 text-teal-600 rounded-full flex items-center justify-center shrink-0">
+                                                <BookOpen size={24} />
+                                            </div>
+                                            <div className="flex-1">
+                                                <div className="font-bold text-gray-900 group-hover:text-teal-700">Book First Lesson</div>
+                                                <div className="text-xs text-gray-500">1-hour paid session</div>
+                                            </div>
+                                            <ChevronRight size={20} className="text-gray-300 group-hover:text-teal-600" />
+                                        </button>
+
+                                        <button
+                                            onClick={() => setConsultationStep('who-are-you')}
+                                            className="w-full py-4 px-4 bg-white border-2 border-yellow-100 hover:border-yellow-500 rounded-2xl flex items-center gap-4 transition-all group text-left shadow-sm hover:shadow-md"
+                                        >
+                                            <div className="w-12 h-12 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center shrink-0">
+                                                <Star size={24} />
+                                            </div>
+                                            <div className="flex-1">
+                                                <div className="font-bold text-gray-900 group-hover:text-yellow-700">Book 10 Hour Block</div>
+                                                <div className="text-xs text-gray-500">Discount for 10 lesson bundle</div>
+                                            </div>
+                                            <ChevronRight size={20} className="text-gray-300 group-hover:text-yellow-600" />
+                                        </button>
+                                    </div>
+                                    <button
+                                        onClick={() => setShowConsultationChoiceModal(false)}
+                                        className="w-full py-2 mt-4 text-gray-400 font-medium hover:text-gray-600 text-sm"
+                                    >
+                                        Cancel
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <div className="w-16 h-16 bg-teal-100 rounded-2xl flex items-center justify-center text-teal-600 mx-auto mb-6">
+                                        <Users size={32} />
+                                    </div>
+                                    <h3 className="text-2xl font-bold text-gray-900 mb-2">Who are you?</h3>
+                                    <p className="text-gray-500 mb-8">Please select your role to continue.</p>
+
+                                    <div className="space-y-4">
+                                        <button
+                                            onClick={() => {
+                                                setShowConsultationChoiceModal(false);
+                                                setConsultationStep('initial');
+                                                setShowStudentBookingModal(true);
+                                                setStudentModalTab('new');
+                                            }}
+                                            className="w-full py-4 bg-purple-600 text-white rounded-2xl font-bold hover:bg-purple-700 transition-all shadow-lg flex items-center justify-center gap-2"
+                                        >
+                                            I am a Student
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShowConsultationChoiceModal(false);
+                                                setConsultationStep('initial');
+                                                setShowParentLoginModal(true);
+                                                setLoginType('new');
+                                            }}
+                                            className="w-full py-4 bg-teal-500 text-white rounded-2xl font-bold hover:bg-teal-600 transition-all shadow-lg flex items-center justify-center gap-2"
+                                        >
+                                            I am a New Parent (Register)
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShowConsultationChoiceModal(false);
+                                                setConsultationStep('initial');
+                                                setShowParentLoginModal(true);
+                                                setLoginType('existing');
+                                                setParentLoginStep('email');
+                                            }}
+                                            className="w-full py-4 bg-white border-2 border-teal-500 text-teal-600 rounded-2xl font-bold hover:bg-teal-50 transition-all shadow-md flex items-center justify-center gap-2"
+                                        >
+                                            I am an Existing Parent (Log In)
+                                        </button>
+                                        <button
+                                            onClick={() => setConsultationStep('initial')}
+                                            className="w-full py-2 text-gray-400 font-medium hover:text-gray-600 text-sm"
+                                        >
+                                            Back
+                                        </button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+
+
+            {/* Student Booking Modal (Used for signup too) */}
             {showStudentBookingModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setShowStudentBookingModal(false)}>
-                    <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 relative animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
-                        <button
-                            onClick={() => setShowStudentBookingModal(false)}
-                            className="absolute top-4 right-4 p-2 text-gray-400 hover:bg-gray-100 rounded-full transition-colors"
-                        >
-                            <span className="text-xl">×</span>
-                        </button>
+                <div className="fixed inset-0 bg-brand-navy/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+                    <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full my-8 relative animate-in zoom-in-95 duration-200 max-h-[85vh] overflow-y-auto">
+                        <button onClick={() => setShowStudentBookingModal(false)} className="absolute top-6 right-6 text-gray-400 hover:text-gray-600 z-10"><X size={24} /></button>
 
-                        <div className="text-center mb-6">
-                            <h2 className="text-2xl font-bold text-gray-900 mb-1">Student Portal</h2>
-                            <p className="text-gray-500 text-sm">Access your interactive dashboard</p>
-                        </div>
+                        <div className="p-8">
+                            <div className="flex items-center gap-3 text-purple-600 font-bold text-xl mb-8">
+                                <GraduationCap size={32} />
+                                <span>Student Registration</span>
+                            </div>
 
-                        {/* Tabs */}
-                        <div className="flex p-1 bg-gray-100 rounded-xl mb-6">
-                            <button
-                                onClick={() => setStudentModalTab('new')}
-                                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${studentModalTab === 'new' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                                New Student
-                            </button>
-                            <button
-                                onClick={() => setStudentModalTab('existing')}
-                                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${studentModalTab === 'existing' ? 'bg-white text-teal-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                                Existing Student
-                            </button>
-                        </div>
+                            <div className="flex gap-4 mb-8 bg-gray-50 p-1 rounded-xl">
+                                <button
+                                    onClick={() => setStudentModalTab('new')}
+                                    className={`flex-1 py-4 rounded-xl font-bold text-sm transition-all ${studentModalTab === 'new' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                                >
+                                    New Student
+                                </button>
+                                <button
+                                    onClick={() => setStudentModalTab('existing')}
+                                    className={`flex-1 py-4 rounded-xl font-bold text-sm transition-all ${studentModalTab === 'existing' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                                >
+                                    Existing Student
+                                </button>
+                            </div>
 
-                        <form onSubmit={(e) => {
-                            e.preventDefault();
-                            const formData = new FormData(e.target);
-                            const name = formData.get('name');
-                            const pin = formData.get('pin');
-                            const email = formData.get('email'); // Only for new
+                            <form onSubmit={(e) => {
+                                e.preventDefault();
+                                const formData = new FormData(e.target);
+                                const name = formData.get('name'); // Moved name here
+                                const pin = formData.get('pin');
+                                const email = formData.get('email'); // Only for new
+                                const subject = formData.get('subject'); // Add subject
 
-                            const existingStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
+                                const existingStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
 
-                            if (studentModalTab === 'existing') {
-                                // Login Logic
-                                const student = existingStudents.find(s => s.name.toLowerCase() === name.toLowerCase());
-                                if (student) {
-                                    // Check if student name is Sarah and PIN is 1234 (explicit request)
-                                    if (student.name.toLowerCase() === 'sarah' && pin === '1234') {
-                                        setShowStudentBookingModal(false);
-                                        navigate(`/student/${encodeURIComponent(student.name)}`);
+                                if (studentModalTab === 'existing') {
+                                    // Login Logic
+                                    const student = existingStudents.find(s => s.name.toLowerCase() === name.toLowerCase());
+                                    if (student) {
+                                        // Check if student name is Sarah and PIN is 1234 (explicit request)
+                                        if (student.name.toLowerCase() === 'sarah' && pin === '1234') {
+                                            setShowStudentBookingModal(false);
+                                            navigate(`/student/${encodeURIComponent(student.name)}`);
+                                            return;
+                                        }
+
+                                        const hashedInput = CryptoJS.SHA256(pin).toString();
+                                        if (student.pin === hashedInput || student.pin === pin) {
+                                            setShowStudentBookingModal(false);
+                                            navigate(`/student/${encodeURIComponent(student.name)}`);
+                                        } else {
+                                            setNotification({ type: 'error', message: 'Incorrect PIN.' });
+                                        }
+                                    } else {
+                                        setNotification({ type: 'error', message: 'Student not found. Please check your name or create a new account.' });
+                                    }
+                                } else {
+                                    // Signup Logic
+                                    if (!name || !email || !pin) return;
+
+                                    // Validate age selection
+                                    if (isUnder16 === null) {
+                                        setNotification({ type: 'error', message: 'Please confirm your age.' });
                                         return;
                                     }
 
-                                    const hashedInput = CryptoJS.SHA256(pin).toString();
-                                    if (student.pin === hashedInput || student.pin === pin) {
-                                        setShowStudentBookingModal(false);
-                                        navigate(`/student/${encodeURIComponent(student.name)}`);
-                                    } else {
-                                        setNotification({ type: 'error', message: 'Incorrect PIN.' });
+                                    const parentEmail = formData.get('parentEmail');
+
+                                    // Validate parent email for under-16 students
+                                    if (isUnder16 && !parentEmail) {
+                                        setNotification({ type: 'error', message: 'Parent/Guardian email is required for students under 16.' });
+                                        return;
                                     }
-                                } else {
-                                    setNotification({ type: 'error', message: 'Student not found. Please check your name or create a new account.' });
+
+                                    if (existingStudents.some(s => s.name.toLowerCase() === name.toLowerCase())) {
+                                        setNotification({ type: 'error', message: 'A student with this name already exists. Please log in or use a different name.' });
+                                        return;
+                                    }
+
+                                    const hashedPin = CryptoJS.SHA256(pin).toString();
+
+                                    // Create parent account if student is under 16
+                                    let parentId = null;
+                                    if (isUnder16 && parentEmail) {
+                                        const existingParents = JSON.parse(localStorage.getItem('tutor_parents')) || [];
+
+                                        // Check if parent already exists
+                                        let parent = existingParents.find(p => p.email.toLowerCase() === parentEmail.toLowerCase());
+
+                                        if (!parent) {
+                                            // Create new parent account
+                                            parentId = Date.now() + Math.random(); // Unique ID
+                                            const newParent = {
+                                                id: parentId,
+                                                email: parentEmail,
+                                                pin: null,  // Set on first login
+                                                firstLogin: true,
+                                                linkedStudents: [],  // Will add student ID after creation
+                                                createdAt: new Date().toISOString()
+                                            };
+                                            existingParents.push(newParent);
+                                            localStorage.setItem('tutor_parents', JSON.stringify(existingParents));
+                                        } else {
+                                            // Parent exists, will link student to them
+                                            parentId = parent.id;
+                                        }
+                                    }
+
+                                    const newStudent = {
+                                        id: Date.now(),
+                                        name: name,
+                                        email: email,
+                                        parentEmail: isUnder16 ? parentEmail : null,
+                                        parentId: parentId,
+                                        isUnder16: isUnder16,
+                                        pin: hashedPin,
+                                        subject: subject || 'Not specified',
+                                        sessionsCompleted: 0,
+                                        totalSpent: 0,
+                                        nextSession: null,
+                                        status: 'Active'
+                                    };
+
+                                    // Link student to parent
+                                    if (parentId) {
+                                        const parents = JSON.parse(localStorage.getItem('tutor_parents')) || [];
+                                        const parentIndex = parents.findIndex(p => p.id === parentId);
+                                        if (parentIndex !== -1) {
+                                            if (!parents[parentIndex].linkedStudents.includes(newStudent.id)) {
+                                                parents[parentIndex].linkedStudents.push(newStudent.id);
+                                            }
+                                            localStorage.setItem('tutor_parents', JSON.stringify(parents));
+                                        }
+                                    }
+
+                                    const updatedStudents = [...existingStudents, newStudent];
+                                    localStorage.setItem('tutor_students', JSON.stringify(updatedStudents));
+                                    window.dispatchEvent(new Event('storage'));
+                                    setShowStudentBookingModal(false);
+                                    setIsUnder16(null); // Reset age state
+
+                                    if (pendingBooking) {
+                                        finalizeBooking('student', newStudent);
+                                    }
+
+                                    navigate(`/student/${encodeURIComponent(name)}`);
                                 }
-                            } else {
-                                // Signup Logic
-                                if (!name || !email || !pin) return;
-
-                                if (existingStudents.some(s => s.name.toLowerCase() === name.toLowerCase())) {
-                                    setNotification({ type: 'error', message: 'A student with this name already exists. Please log in or use a different name.' });
-                                    return;
-                                }
-
-                                const hashedPin = CryptoJS.SHA256(pin).toString();
-                                const newStudent = {
-                                    id: Date.now(),
-                                    name: name,
-                                    email: email,
-                                    pin: hashedPin,
-                                    subject: 'Not specified',
-                                    sessionsCompleted: 0,
-                                    totalSpent: 0,
-                                    nextSession: null,
-                                    status: 'Active'
-                                };
-                                const updatedStudents = [...existingStudents, newStudent];
-                                localStorage.setItem('tutor_students', JSON.stringify(updatedStudents));
-                                window.dispatchEvent(new Event('storage'));
-                                setShowStudentBookingModal(false);
-                                navigate(`/student/${encodeURIComponent(name)}`);
-                            }
-                        }}>
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-bold text-gray-700 mb-2">Student Name</label>
-                                    <input
-                                        type="text"
-                                        name="name"
-                                        required
-                                        placeholder="e.g. Sarah Johnson"
-                                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none"
-                                    />
-                                </div>
-
-                                {studentModalTab === 'new' && (
-                                    <div className="animate-in slide-in-from-top-2">
-                                        <label className="block text-sm font-bold text-gray-700 mb-2">Email Address</label>
+                            }}>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-bold text-gray-700 mb-2">Student Name</label>
                                         <input
-                                            type="email"
-                                            name="email"
+                                            type="text"
+                                            name="name"
                                             required
-                                            placeholder="e.g. sarah@example.com"
+                                            placeholder="e.g. Sarah Johnson"
                                             className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none"
                                         />
-                                        <p className="text-xs text-gray-400 mt-1">For notifications and receipts</p>
                                     </div>
-                                )}
 
-                                <div>
-                                    <label className="block text-sm font-bold text-gray-700 mb-2">
-                                        {studentModalTab === 'new' ? 'Create 4-Digit PIN' : 'Enter PIN'}
-                                    </label>
-                                    <input
-                                        type="password"
-                                        name="pin"
-                                        required
-                                        maxLength="4"
-                                        pattern="[0-9]{4}"
-                                        placeholder="••••"
-                                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none text-center text-2xl tracking-widest font-mono"
-                                    />
-                                </div>
-
-                                {studentModalTab === 'new' && (
-                                    <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 animate-in slide-in-from-top-2">
-                                        <label className="flex items-start gap-3 cursor-pointer">
-                                            <input
-                                                type="checkbox"
+                                    {studentModalTab === 'new' && (
+                                        <div>
+                                            <label className="block text-sm font-bold text-gray-700 mb-2">Subject</label>
+                                            <select
+                                                name="subject"
                                                 required
-                                                className="mt-1 w-5 h-5 text-purple-600 focus:ring-2 focus:ring-purple-500 rounded"
-                                            />
-                                            <span className="text-sm text-gray-700 flex-1">
-                                                I consent to my data being processed in accordance with the Privacy Policy.
-                                            </span>
+                                                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none bg-white font-medium"
+                                            >
+                                                <option value="">Select a subject...</option>
+                                                <option value="KS3 Maths">KS3 Maths</option>
+                                                <option value="GCSE Maths">GCSE Maths</option>
+                                                <option value="GCSE Sociology">GCSE Sociology</option>
+                                                <option value="A-Level Sociology">A-Level Sociology</option>
+                                            </select>
+                                        </div>
+                                    )}
+
+                                    {studentModalTab === 'new' && (
+                                        <>
+                                            {/* Age Verification */}
+                                            <div className="animate-in slide-in-from-top-2">
+                                                <label className="block text-sm font-bold text-gray-700 mb-3">Age Verification</label>
+                                                <div className="space-y-2">
+                                                    <label className={`flex items-center gap-3 p-3 border-2 rounded-xl cursor-pointer transition-all hover:bg-gray-50 ${isUnder16 === false ? 'border-purple-500 bg-purple-50' : 'border-gray-200'}`}>
+                                                        <input
+                                                            type="radio"
+                                                            name="age"
+                                                            value="16plus"
+                                                            checked={isUnder16 === false}
+                                                            onChange={() => setIsUnder16(false)}
+                                                            className="w-5 h-5 text-purple-600 focus:ring-2 focus:ring-purple-500"
+                                                        />
+                                                        <span className="text-sm font-medium text-gray-700">I am 16 or older</span>
+                                                    </label>
+                                                    <label className={`flex items-center gap-3 p-3 border-2 rounded-xl cursor-pointer transition-all hover:bg-gray-50 ${isUnder16 === true ? 'border-purple-500 bg-purple-50' : 'border-gray-200'}`}>
+                                                        <input
+                                                            type="radio"
+                                                            name="age"
+                                                            value="under16"
+                                                            checked={isUnder16 === true}
+                                                            onChange={() => setIsUnder16(true)}
+                                                            className="w-5 h-5 text-purple-600 focus:ring-2 focus:ring-purple-500"
+                                                        />
+                                                        <span className="text-sm font-medium text-gray-700">I am under 16</span>
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            {/* Student Email */}
+                                            <div className="animate-in slide-in-from-top-2">
+                                                <label className="block text-sm font-bold text-gray-700 mb-2">Email Address</label>
+                                                <input
+                                                    type="email"
+                                                    name="email"
+                                                    required
+                                                    placeholder="e.g. sarah@example.com"
+                                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none"
+                                                />
+                                                <p className="text-xs text-gray-400 mt-1">For notifications and receipts</p>
+                                            </div>
+
+                                            {/* Conditional Parent Email Field */}
+                                            {isUnder16 === true && (
+                                                <div className="animate-in slide-in-from-top-2 bg-blue-50 border border-blue-200 rounded-xl p-4">
+                                                    <div className="flex items-center gap-2 mb-3">
+                                                        <span className="text-xl">👨‍👩‍👧</span>
+                                                        <label className="block text-sm font-bold text-gray-700">Parent/Guardian Email</label>
+                                                    </div>
+                                                    <input
+                                                        type="email"
+                                                        name="parentEmail"
+                                                        required={isUnder16}
+                                                        placeholder="e.g. parent@example.com"
+                                                        className="w-full px-4 py-3 border border-blue-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                                                    />
+                                                    <p className="text-xs text-blue-600 mt-2 flex items-start gap-1">
+                                                        <span>ℹ️</span>
+                                                        <span>Your parent will receive copies of all booking confirmations and payment receipts</span>
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+
+                                    <div>
+                                        <label className="block text-sm font-bold text-gray-700 mb-2">
+                                            {studentModalTab === 'new' ? 'Create 4-Digit PIN' : 'Enter PIN'}
                                         </label>
+                                        <input
+                                            type="password"
+                                            name="pin"
+                                            required
+                                            maxLength="4"
+                                            pattern="[0-9]{4}"
+                                            placeholder="••••"
+                                            className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none text-center text-2xl tracking-widest font-mono"
+                                        />
                                     </div>
-                                )}
 
-                                <button
-                                    type="submit"
-                                    className={`w-full py-3 text-white rounded-xl font-bold transition-all shadow-md hover:shadow-lg ${studentModalTab === 'new' ? 'bg-purple-600 hover:bg-purple-700' : 'bg-teal-500 hover:bg-teal-600'
-                                        }`}
-                                >
-                                    {studentModalTab === 'new' ? 'Create Account & Book' : 'Log In to Dashboard'}
-                                </button>
-                            </div>
-                        </form>
+                                    {studentModalTab === 'new' && (
+                                        <div className="space-y-3">
+                                            {/* Parental Consent Checkbox (for under-16 only) */}
+                                            {isUnder16 === true && (
+                                                <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 animate-in slide-in-from-top-2">
+                                                    <label className="flex items-start gap-3 cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            required={isUnder16}
+                                                            className="mt-1 w-5 h-5 text-orange-600 focus:ring-2 focus:ring-orange-500 rounded"
+                                                        />
+                                                        <span className="text-sm text-gray-700 flex-1">
+                                                            My parent/guardian consents to me using this platform and has reviewed the <a href="/privacy" className="text-purple-600 underline" target="_blank">Privacy Policy</a> and <a href="/terms" className="text-purple-600 underline" target="_blank">Terms of Service</a>.
+                                                        </span>
+                                                    </label>
+                                                </div>
+                                            )}
 
-                        <button
-                            onClick={() => {
-                                setShowStudentBookingModal(false);
-                                setShowForgotPinModal(true);
-                            }}
-                            className="w-full mt-4 text-sm text-gray-400 hover:text-gray-600 font-semibold"
-                        >
-                            Forgot PIN?
-                        </button>
+                                            {/* General Data Processing Consent (all ages) */}
+                                            <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 animate-in slide-in-from-top-2">
+                                                <label className="flex items-start gap-3 cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        required
+                                                        className="mt-1 w-5 h-5 text-purple-600 focus:ring-2 focus:ring-purple-500 rounded"
+                                                    />
+                                                    <span className="text-sm text-gray-700 flex-1">
+                                                        I consent to my data being processed in accordance with the Privacy Policy.
+                                                    </span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <button
+                                        type="submit"
+                                        className={`w-full py-3 text-white rounded-xl font-bold transition-all shadow-md hover:shadow-lg ${studentModalTab === 'new' ? 'bg-purple-600 hover:bg-purple-700' : 'bg-teal-500 hover:bg-teal-600'
+                                            }`}
+                                    >
+                                        {studentModalTab === 'new' ? 'Create Account & Book' : 'Log In to Dashboard'}
+                                    </button>
+                                </div>
+                            </form>
+
+                            <button
+                                onClick={() => {
+                                    setShowStudentBookingModal(false);
+                                    setShowForgotPinModal(true);
+                                }}
+                                className="w-full mt-4 text-sm text-gray-400 hover:text-gray-600 font-semibold"
+                            >
+                                Forgot PIN?
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -794,6 +1426,349 @@ const LandingPage = () => {
                 </div>
             )}
 
+            {/* Parent Login Modal */}
+            {showParentLoginModal && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => { setShowParentLoginModal(false); setParentLoginStep('email'); }}>
+                    <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 relative animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                        <button
+                            onClick={() => { setShowParentLoginModal(false); setParentLoginStep('email'); }}
+                            className="absolute top-4 right-4 p-2 text-gray-400 hover:bg-gray-100 rounded-full transition-colors"
+                        >
+                            <span className="text-xl">×</span>
+                        </button>
+
+                        <div className="text-center mb-6">
+                            <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <User size={32} className="text-blue-600" />
+                            </div>
+                            <h2 className="text-2xl font-bold text-gray-900 mb-1">Parent Portal</h2>
+                            <p className="text-gray-500 text-sm">
+                                {parentLoginStep === 'email' && 'Enter your email to continue'}
+                                {parentLoginStep === 'createPin' && 'Create your secure PIN'}
+                                {parentLoginStep === 'enterPin' && 'Enter your PIN to log in'}
+                            </p>
+                        </div>
+
+                        <div className="flex gap-4 mb-8 bg-gray-50 p-1 rounded-xl">
+                            <button
+                                onClick={() => setLoginType('existing')}
+                                className={`flex-1 py-3 rounded-lg font-bold text-sm transition-all ${loginType === 'existing' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                            >
+                                Existing Parent
+                            </button>
+                            <button
+                                onClick={() => setLoginType('new')}
+                                className={`flex-1 py-3 rounded-lg font-bold text-sm transition-all ${loginType === 'new' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                            >
+                                New Parent
+                            </button>
+                        </div>
+
+                        {loginType === 'new' ? (
+                            <div className="space-y-4">
+                                <h2 className="text-2xl font-bold text-gray-900 text-center mb-6">Create Parent Account</h2>
+                                <form onSubmit={(e) => {
+                                    e.preventDefault();
+                                    const formData = new FormData(e.target);
+                                    const parentName = formData.get('parentName');
+                                    const studentName = formData.get('studentName');
+                                    const subject = formData.get('subject');
+                                    const email = formData.get('email');
+                                    const pin = formData.get('pin');
+
+                                    if (!parentName || !studentName || !subject || !email || !pin) return;
+
+                                    const existingParents = JSON.parse(localStorage.getItem('tutor_parents')) || [];
+                                    if (existingParents.some(p => p.email.toLowerCase() === email.toLowerCase())) {
+                                        setNotification({ type: 'error', message: 'An account with this email already exists. Please log in.' });
+                                        return;
+                                    }
+
+                                    // Create Parent
+                                    const newParent = {
+                                        id: Date.now(),
+                                        name: parentName,
+                                        email: email,
+                                        pin: pin,
+                                        linkedStudents: [],
+                                        createdAt: new Date().toISOString()
+                                    };
+
+                                    // Create Student
+                                    const newStudent = {
+                                        id: Date.now() + 1,
+                                        name: studentName,
+                                        email: email, // Parent email as contact
+                                        parentEmail: email,
+                                        parentId: newParent.id,
+                                        isUnder16: true, // Assumed for parent booking
+                                        pin: CryptoJS.SHA256('0000').toString(), // Default PIN for student, parent manages
+                                        subject: subject,
+                                        sessionsCompleted: 0,
+                                        totalSpent: 0,
+                                        nextSession: null,
+                                        status: 'Active'
+                                    };
+
+                                    newParent.linkedStudents.push(newStudent.id);
+
+                                    // Save
+                                    existingParents.push(newParent);
+                                    localStorage.setItem('tutor_parents', JSON.stringify(existingParents));
+
+                                    const existingStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
+                                    existingStudents.push(newStudent);
+                                    localStorage.setItem('tutor_students', JSON.stringify(existingStudents));
+
+                                    window.dispatchEvent(new Event('storage'));
+
+                                    // Auto Login
+                                    setParentAccount(newParent);
+                                    setShowParentLoginModal(false);
+
+                                    if (pendingBooking) {
+                                        finalizeBooking('parent', { ...newParent, name: studentName, id: newStudent.id, parentId: newParent.id });
+                                    }
+
+                                    navigate(`/parent/${encodeURIComponent(email)}`);
+                                    setNotification({ type: 'success', message: 'Account created and booking confirmed!' });
+                                }}>
+                                    <div>
+                                        <label className="block text-sm font-bold text-gray-700 mb-2">Parent Name</label>
+                                        <input required name="parentName" type="text" placeholder="Your Name" className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-gray-700 mb-2">Student Name</label>
+                                        <input required name="studentName" type="text" placeholder="Child's Name" className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none" />
+                                    </div>
+                                    {selectedSubject ? (
+                                        <div>
+                                            <label className="block text-sm font-bold text-gray-700 mb-2">Subject</label>
+                                            <div className="w-full px-4 py-3 border border-gray-200 bg-gray-50 rounded-xl text-gray-700 font-bold flex items-center justify-between">
+                                                <span>{selectedSubject}</span>
+                                                <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full uppercase">Selected</span>
+                                            </div>
+                                            <input type="hidden" name="subject" value={selectedSubject} />
+                                        </div>
+                                    ) : (
+                                        <div>
+                                            <label className="block text-sm font-bold text-gray-700 mb-2">Subject</label>
+                                            <select required name="subject" className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none bg-white">
+                                                <option value="">Select a subject...</option>
+                                                <option value="KS3 Maths">KS3 Maths</option>
+                                                <option value="GCSE Maths">GCSE Maths</option>
+                                                <option value="GCSE Sociology">GCSE Sociology</option>
+                                                <option value="A-Level Sociology">A-Level Sociology</option>
+                                            </select>
+                                        </div>
+                                    )}
+                                    <div>
+                                        <label className="block text-sm font-bold text-gray-700 mb-2">Email Address</label>
+                                        <input required name="email" type="email" placeholder="parent@example.com" className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-gray-700 mb-2">Create PIN (4 Digits)</label>
+                                        <input required name="pin" type="text" maxLength="4" pattern="[0-9]{4}" placeholder="••••" className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none text-center tracking-widest font-mono text-lg" />
+                                        <p className="text-xs text-gray-400 mt-1">You'll use this to log in securely.</p>
+                                    </div>
+
+                                    <button type="submit" className="w-full py-4 bg-purple-600 text-white rounded-2xl font-bold hover:bg-purple-700 transition-all shadow-lg mt-4">
+                                        Create Account & Dashboard
+                                    </button>
+                                </form>
+                            </div>
+                        ) : (
+                            <>
+                                {/* Step 1: Email Entry */}
+                                {parentLoginStep === 'email' && (
+                                    <form onSubmit={(e) => {
+                                        e.preventDefault();
+                                        const formData = new FormData(e.target);
+                                        const email = formData.get('email');
+
+                                        const existingParents = JSON.parse(localStorage.getItem('tutor_parents')) || [];
+                                        const parent = existingParents.find(p => p.email.toLowerCase() === email.toLowerCase());
+
+                                        if (!parent) {
+                                            setNotification({ type: 'error', message: 'No parent account found with this email. Please check your email or contact support.' });
+                                            return;
+                                        }
+
+                                        setParentEmail(email);
+                                        setParentAccount(parent);
+
+                                        if (parent.firstLogin || !parent.pin) {
+                                            setParentLoginStep('createPin');
+                                        } else {
+                                            setParentLoginStep('enterPin');
+                                        }
+                                    }}>
+                                        <div className="mb-6">
+                                            <label className="block text-sm font-bold text-gray-700 mb-2">Parent Email Address</label>
+                                            <input
+                                                type="email"
+                                                name="email"
+                                                required
+                                                placeholder="e.g. parent@example.com"
+                                                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                                            />
+                                            <p className="text-xs text-gray-400 mt-1">The email you provided during your child's signup</p>
+                                        </div>
+
+                                        <button
+                                            type="submit"
+                                            className="w-full bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold transition-all shadow-md hover:shadow-lg"
+                                        >
+                                            Continue
+                                        </button>
+                                    </form>
+                                )}
+
+                                {/* Step 2: Create PIN (First Login) */}
+                                {parentLoginStep === 'createPin' && (
+                                    <form onSubmit={(e) => {
+                                        e.preventDefault();
+                                        const formData = new FormData(e.target);
+                                        const firstName = formData.get('firstName');
+                                        const pin = formData.get('pin');
+                                        const confirmPin = formData.get('confirmPin');
+
+                                        if (!firstName) {
+                                            setNotification({ type: 'error', message: 'Please enter your first name.' });
+                                            return;
+                                        }
+
+                                        if (pin !== confirmPin) {
+                                            setNotification({ type: 'error', message: 'PINs do not match. Please try again.' });
+                                            return;
+                                        }
+
+                                        const hashedPin = CryptoJS.SHA256(pin).toString();
+
+                                        const parents = JSON.parse(localStorage.getItem('tutor_parents')) || [];
+                                        const parentIndex = parents.findIndex(p => p.email.toLowerCase() === parentEmail.toLowerCase());
+
+                                        if (parentIndex !== -1) {
+                                            parents[parentIndex].firstName = formatName(firstName);
+                                            parents[parentIndex].pin = hashedPin;
+                                            parents[parentIndex].firstLogin = false;
+                                            localStorage.setItem('tutor_parents', JSON.stringify(parents));
+
+                                            setShowParentLoginModal(false);
+                                            setParentLoginStep('email');
+                                            navigate(`/parent/${encodeURIComponent(parentEmail)}`);
+                                        }
+                                    }}>
+                                        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
+                                            <p className="text-sm text-blue-800">
+                                                <strong>Welcome!</strong> This is your first time logging in. Please create a 4-digit PIN to secure your account.
+                                            </p>
+                                        </div>
+
+                                        <div className="space-y-4 mb-6">
+                                            <div>
+                                                <label className="block text-sm font-bold text-gray-700 mb-2">First Name</label>
+                                                <input
+                                                    type="text"
+                                                    name="firstName"
+                                                    required
+                                                    placeholder="e.g. Sarah"
+                                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm font-bold text-gray-700 mb-2">Create 4-Digit PIN</label>
+                                                <input
+                                                    type="password"
+                                                    name="pin"
+                                                    required
+                                                    maxLength="4"
+                                                    pattern="[0-9]{4}"
+                                                    placeholder="••••"
+                                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-center text-2xl tracking-widest font-mono"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm font-bold text-gray-700 mb-2">Confirm PIN</label>
+                                                <input
+                                                    type="password"
+                                                    name="confirmPin"
+                                                    required
+                                                    maxLength="4"
+                                                    pattern="[0-9]{4}"
+                                                    placeholder="••••"
+                                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-center text-2xl tracking-widest font-mono"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <button
+                                            type="submit"
+                                            className="w-full bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold transition-all shadow-md hover:shadow-lg"
+                                        >
+                                            Create PIN & Continue
+                                        </button>
+                                    </form>
+                                )}
+
+                                {/* Step 3: Enter PIN (Returning Users) */}
+                                {parentLoginStep === 'enterPin' && (
+                                    <form onSubmit={(e) => {
+                                        e.preventDefault();
+                                        const formData = new FormData(e.target);
+                                        const pin = formData.get('pin');
+
+                                        const hashedInput = CryptoJS.SHA256(pin).toString();
+
+                                        if (parentAccount.pin === hashedInput || parentAccount.pin === pin) {
+                                            setShowParentLoginModal(false);
+                                            setParentLoginStep('email');
+                                            navigate(`/parent/${encodeURIComponent(parentEmail)}`);
+                                        } else {
+                                            setNotification({ type: 'error', message: 'Incorrect PIN. Please try again.' });
+                                        }
+                                    }}>
+                                        <div className="mb-6">
+                                            <p className="text-sm text-gray-600 mb-4">
+                                                Welcome back! Please enter your PIN to access your parent portal.
+                                            </p>
+
+                                            <label className="block text-sm font-bold text-gray-700 mb-2">Enter Your PIN</label>
+                                            <input
+                                                type="password"
+                                                name="pin"
+                                                required
+                                                maxLength="4"
+                                                pattern="[0-9]{4}"
+                                                placeholder="••••"
+                                                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-center text-2xl tracking-widest font-mono"
+                                            />
+                                        </div>
+
+                                        <button
+                                            type="submit"
+                                            className="w-full bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold transition-all shadow-md hover:shadow-lg"
+                                        >
+                                            Log In
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            onClick={() => setParentLoginStep('email')}
+                                            className="w-full mt-4 text-sm text-gray-500 hover:text-gray-700"
+                                        >
+                                            ← Use Different Email
+                                        </button>
+                                    </form>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* Notification Modal */}
             {notification && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setNotification(null)}>
@@ -812,477 +1787,6 @@ const LandingPage = () => {
                 </div>
             )}
         </div>
-    );
-};
-
-// Booking Grid Component
-const BookingGrid = () => {
-    const [availableSlots, setAvailableSlots] = useState([]);
-    const [selectedDay, setSelectedDay] = useState(null);
-    const [showBookingModal, setShowBookingModal] = useState(false);
-    const [selectedSlot, setSelectedSlot] = useState(null);
-    const [bookingName, setBookingName] = useState('');
-    const [bookingEmail, setBookingEmail] = useState('');
-    const [bookingSubject, setBookingSubject] = useState('');
-    const [bookingFor, setBookingFor] = useState('pupil'); // 'pupil' or 'parent'
-    const [studentAge, setStudentAge] = useState(''); // 'under16' or '16plus'
-    const [isParent, setIsParent] = useState(null); // true/false for under-16 bookings
-    const [parentEmail, setParentEmail] = useState(''); // for non-parent bookings of under-16
-    const [gdprConsent, setGdprConsent] = useState(false);
-
-    const [confirmationData, setConfirmationData] = useState(null);
-    const [copySuccess, setCopySuccess] = useState(false);
-
-    // Default Schedule (matches Teacher Dashboard defaults)
-    const defaultSchedule = [
-        { day: 'Monday', intervals: [{ start: '09:00', end: '15:00' }, { start: '18:45', end: '20:00' }], active: true },
-        { day: 'Tuesday', intervals: [{ start: '18:00', end: '20:00' }], active: true },
-        { day: 'Wednesday', intervals: [{ start: '13:00', end: '16:00' }], active: true },
-        { day: 'Thursday', intervals: [{ start: '09:00', end: '16:00' }, { start: '19:00', end: '20:00' }], active: true },
-        { day: 'Friday', intervals: [{ start: '09:00', end: '12:00' }, { start: '18:00', end: '20:00' }], active: true },
-        { day: 'Saturday', intervals: [{ start: '09:00', end: '18:00' }], active: true },
-        { day: 'Sunday', intervals: [{ start: '09:00', end: '18:00' }], active: true },
-    ];
-
-    // Load slots
-    useEffect(() => {
-        const loadSlots = () => {
-            const schedule = JSON.parse(localStorage.getItem('tutor_weekly_schedule')) || defaultSchedule;
-            const manualSlots = JSON.parse(localStorage.getItem('tutor_slots')) || [];
-            const manualLessonSlots = JSON.parse(localStorage.getItem('tutor_lesson_slots')) || [];
-            const bookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
-
-            const generated = [];
-            const today = new Date();
-
-            // 1. Generate from Weekly Schedule (Next 30 days)
-            for (let i = 0; i < 30; i++) {
-                const date = new Date(today);
-                date.setDate(today.getDate() + i);
-                const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
-
-                const dayRule = schedule.find(s => s.day === dayName);
-                if (dayRule && dayRule.active) {
-                    if (dayRule.intervals) {
-                        dayRule.intervals.forEach(interval => {
-                            let current = new Date(date.toDateString() + ' ' + interval.start);
-                            const end = new Date(date.toDateString() + ' ' + interval.end);
-                            while (current < end) {
-                                const timeStr = current.toTimeString().slice(0, 5);
-                                const dateStr = date.toISOString().split('T')[0];
-                                const slotId = `${dateStr}-${timeStr}`;
-                                if (current > new Date()) {
-                                    generated.push({ id: slotId, date: dateStr, time: timeStr, type: 'weekly' });
-                                }
-                                current.setMinutes(current.getMinutes() + 15);
-                            }
-                        });
-                    } else if (dayRule.start && dayRule.end) {
-                        let current = new Date(date.toDateString() + ' ' + dayRule.start);
-                        const end = new Date(date.toDateString() + ' ' + dayRule.end);
-                        while (current < end) {
-                            const timeStr = current.toTimeString().slice(0, 5);
-                            const dateStr = date.toISOString().split('T')[0];
-                            const slotId = `${dateStr}-${timeStr}`;
-                            if (current > new Date()) {
-                                generated.push({ id: slotId, date: dateStr, time: timeStr, type: 'weekly' });
-                            }
-                            current.setMinutes(current.getMinutes() + 15);
-                        }
-                    }
-                }
-            }
-
-            // 2. Add Manual 15m Slots
-            manualSlots.forEach(slot => {
-                const slotId = `${slot.date}-${slot.time}`;
-                if (!generated.some(g => g.id === slotId) && !slot.bookedBy && new Date(slot.date + 'T' + slot.time) > new Date()) {
-                    generated.push({ id: slotId, date: slot.date, time: slot.time, type: 'manual' });
-                }
-            });
-
-            // 2b. Add Manual 1-Hour Lesson Slots (Treat as 4 x 15min slots for landing grid)
-            manualLessonSlots.forEach(slot => {
-                const dateStr = slot.date;
-                const timeStr = slot.time;
-                let current = new Date(dateStr + 'T' + timeStr);
-
-                // If the slot is already booked in lessonSlots metadata, we skip adding it here (handled by bookings filter later anyway, but cleaner)
-                if (slot.bookedBy) return;
-
-                for (let i = 0; i < 4; i++) {
-                    const t = current.toTimeString().slice(0, 5);
-                    const slotId = `${dateStr}-${t}`;
-                    if (!generated.some(g => g.id === slotId) && current > new Date()) {
-                        generated.push({ id: slotId, date: dateStr, time: t, type: 'manual-lesson' });
-                    }
-                    current.setMinutes(current.getMinutes() + 15);
-                }
-            });
-
-            // 3. Filter Booked Slots & Check for Overlaps
-            const activeBookings = bookings.filter(b => b.status !== 'cancelled');
-
-            const finalSlots = generated.filter(slot => {
-                const slotTime = new Date(`${slot.date}T${slot.time}`);
-
-                // Check for ANY booking that overlaps with this 15-min slot
-                const overlap = activeBookings.find(b => {
-                    if (b.date !== slot.date) return false;
-
-                    const bookingStart = new Date(`${b.date}T${b.time}`);
-                    // Lessons are 60 mins, Consultations (assumed if not lesson) are 15 mins
-                    const duration = b.type === 'lesson' || b.student ? 60 : 15;
-                    const bookingEnd = new Date(bookingStart.getTime() + duration * 60000);
-
-                    return slotTime >= bookingStart && slotTime < bookingEnd;
-                });
-
-                return !overlap;
-            });
-
-            setAvailableSlots(finalSlots);
-        };
-
-        loadSlots();
-        window.addEventListener('storage', loadSlots);
-        return () => window.removeEventListener('storage', loadSlots);
-    }, []);
-
-    const slotsByDate = availableSlots.reduce((acc, slot) => {
-        if (!acc[slot.date]) acc[slot.date] = [];
-        acc[slot.date].push(slot);
-        return acc;
-    }, {});
-
-    const sortedDates = Object.keys(slotsByDate).sort();
-
-    const openBookingModal = (slot) => {
-        setSelectedSlot(slot);
-        setShowBookingModal(true);
-    };
-
-    const confirmBooking = (e) => {
-        e.preventDefault();
-        if (!selectedSlot || !bookingName || !bookingEmail || !bookingSubject || !gdprConsent) return;
-
-        // Generate Meeting Link (Simulated)
-        const bookingId = selectedSlot.id || 'consult-' + Date.now().toString(36);
-        const meetingLink = `${window.location.origin}/session/${bookingId}?host=false&name=${encodeURIComponent(bookingName)}`;
-
-        const newBooking = {
-            id: bookingId,
-            date: selectedSlot.date,
-            time: selectedSlot.time,
-            student: bookingName,
-            email: bookingEmail,
-            subject: bookingSubject,
-            bookingFor: bookingFor, // 'pupil' or 'parent'
-            type: 'lesson', // Changed from consultation to lesson for paid booking
-            meetingLink: meetingLink,
-            bookedAt: new Date().toISOString(),
-            paymentStatus: 'Due',
-            cost: 30, // Default lesson cost
-            status: 'confirmed'
-        };
-
-        const bookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
-        bookings.push(newBooking);
-        localStorage.setItem('tutor_bookings', JSON.stringify(bookings));
-        window.dispatchEvent(new Event('storage'));
-
-        // Close Booking Modal
-        setShowBookingModal(false);
-
-        // Send Confirmation Email (Async)
-        emailService.sendConfirmation({
-            ...newBooking,
-            link: meetingLink
-        }).catch(err => {
-            console.error('Email confirmation error:', err);
-        });
-
-        // Show Confirmation Modal (Instead of Redirect)
-        setConfirmationData({
-            ...newBooking,
-            link: meetingLink
-        });
-
-        // Reset Form
-        setBookingName('');
-        setBookingEmail('');
-        setBookingSubject('');
-        setGdprConsent(false);
-    };
-
-    if (availableSlots.length === 0) {
-        return (
-            <div className="text-center py-12 text-gray-500">
-                <Calendar size={48} className="mx-auto mb-4 opacity-50" />
-                <p>No available slots found for the next 30 days.</p>
-                <p className="text-sm">Please check back later or contact me directly.</p>
-            </div>
-        );
-    }
-
-    return (
-        <div className="flex flex-col md:flex-row gap-8 min-h-[500px] md:h-[500px]">
-            {/* Calendar / Date List */}
-            <div className="md:w-1/3 overflow-y-auto pr-2 custom-scrollbar">
-                <h3 className="font-bold text-gray-400 uppercase text-xs mb-3 sticky top-0 bg-brand-light py-2">Select Date</h3>
-                <div className="space-y-2">
-                    {sortedDates.map(date => {
-                        const d = new Date(date);
-                        const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
-                        const isSelected = selectedDay === date;
-
-                        return (
-                            <button
-                                key={date}
-                                onClick={() => setSelectedDay(date)}
-                                className={`w-full p-4 rounded-xl text-left transition-all border-2 ${isSelected ? 'border-purple-600 bg-purple-50 text-purple-900' : 'border-white bg-white hover:border-purple-100'}`}
-                            >
-                                <div className="font-bold text-sm uppercase text-gray-400">{dayName}</div>
-                                <div className="font-extrabold text-xl text-gray-800">
-                                    {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                </div>
-                                <div className="text-xs text-purple-600 font-bold mt-1">
-                                    {slotsByDate[date].length >= 50 ? '50+' : slotsByDate[date].length} Slots
-                                </div>
-                            </button>
-                        );
-                    })}
-                </div>
-            </div>
-
-            {/* Time Slots */}
-            <div className="md:w-2/3 bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col">
-                {selectedDay ? (
-                    <>
-                        <h3 className="font-bold text-gray-800 text-xl mb-4 flex items-center gap-2">
-                            <Clock size={20} className="text-purple-600" />
-                            {new Date(selectedDay).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-                        </h3>
-                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 overflow-y-auto pr-2 custom-scrollbar max-h-[400px]">
-                            {slotsByDate[selectedDay].sort((a, b) => a.time.localeCompare(b.time)).map(slot => (
-                                <button
-                                    key={slot.id}
-                                    onClick={() => openBookingModal(slot)}
-                                    className="py-2 px-1 rounded-lg border border-gray-200 hover:border-purple-600 hover:bg-purple-600 hover:text-white transition-all text-sm font-bold text-gray-700"
-                                >
-                                    {new Date('2000-01-01T' + slot.time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
-                                </button>
-                            ))}
-                        </div>
-                    </>
-                ) : (
-                    <div className="h-full flex flex-col items-center justify-center text-gray-300">
-                        <Calendar size={64} className="mb-4 opacity-20" />
-                        <p>Select a date to view times</p>
-                    </div>
-                )}
-            </div>
-
-            {/* Booking Modal */}
-            {showBookingModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowBookingModal(false)}>
-                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-2xl max-w-md w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        <h2 className="text-2xl font-bold text-gray-800 mb-2">Confirm Consultation</h2>
-                        <p className="text-gray-500 mb-6">Free 15-minute chat on {selectedSlot && new Date(selectedSlot.date).toLocaleDateString()} at {selectedSlot && selectedSlot.time}</p>
-
-                        <form onSubmit={confirmBooking} className="space-y-4">
-                            <div>
-                                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Your Name</label>
-                                <input required type="text" value={bookingName} onChange={e => setBookingName(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:border-purple-500 outline-none" placeholder="Jane Doe" />
-                            </div>
-                            <div>
-                                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Email Address</label>
-                                <input required type="email" value={bookingEmail} onChange={e => setBookingEmail(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:border-purple-500 outline-none" placeholder="jane@example.com" />
-                            </div>
-                            <div>
-                                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Topic / Subject</label>
-                                <select
-                                    required
-                                    value={bookingSubject}
-                                    onChange={e => setBookingSubject(e.target.value)}
-                                    className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:border-purple-500 outline-none appearance-none cursor-pointer"
-                                >
-                                    <option value="" disabled>Select a Subject</option>
-                                    <option value="Maths KS3">Maths KS3</option>
-                                    <option value="Maths GCSE">Maths GCSE</option>
-                                    <option value="Sociology GCSE">Sociology GCSE</option>
-                                    <option value="Sociology A Level">Sociology A Level</option>
-                                </select>
-                            </div>
-
-                            <div>
-                                <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Booking For</label>
-                                <div className="flex gap-3">
-                                    <label className={`flex-1 flex items-center gap-2 p-3 border-2 rounded-xl cursor-pointer transition-all hover:border-purple-300 ${bookingFor === 'pupil' ? 'border-purple-600 bg-purple-50' : 'border-gray-200 bg-gray-50'}`}>
-                                        <input
-                                            type="radio"
-                                            name="bookingFor"
-                                            value="pupil"
-                                            checked={bookingFor === 'pupil'}
-                                            onChange={e => setBookingFor(e.target.value)}
-                                            className="w-4 h-4 text-purple-600"
-                                        />
-                                        <span className="text-sm font-bold text-gray-700">Pupil</span>
-                                    </label>
-                                    <label className="flex-1 flex items-center gap-2 p-3 border-2 rounded-xl cursor-pointer transition-all hover:border-purple-300 ${bookingFor === 'parent' ? 'border-purple-600 bg-purple-50' : 'border-gray-200 bg-gray-50'}">
-                                        <input
-                                            type="radio"
-                                            name="bookingFor"
-                                            value="parent"
-                                            checked={bookingFor === 'parent'}
-                                            onChange={e => setBookingFor(e.target.value)}
-                                            className="w-4 h-4 text-purple-600"
-                                        />
-                                        <span className="text-sm font-bold text-gray-700">Parent</span>
-                                    </label>
-                                </div>
-                            </div>
-
-                            {/* Age Verification */}
-                            <div>
-                                <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Student Age</label>
-                                <div className="flex gap-3">
-                                    <label className={`flex-1 flex items-center gap-2 p-3 border-2 rounded-xl cursor-pointer transition-all hover:border-purple-300 ${studentAge === '16plus' ? 'border-purple-600 bg-purple-50' : 'border-gray-200 bg-gray-50'}`}>
-                                        <input
-                                            type="radio"
-                                            name="studentAge"
-                                            value="16plus"
-                                            checked={studentAge === '16plus'}
-                                            onChange={e => { setStudentAge(e.target.value); setIsParent(null); setParentEmail(''); }}
-                                            required
-                                            className="w-4 h-4 text-purple-600"
-                                        />
-                                        <span className="text-sm font-bold text-gray-700">16+ years</span>
-                                    </label>
-                                    <label className={`flex-1 flex items-center gap-2 p-3 border-2 rounded-xl cursor-pointer transition-all hover:border-purple-300 ${studentAge === 'under16' ? 'border-purple-600 bg-purple-50' : 'border-gray-200 bg-gray-50'}`}>
-                                        <input
-                                            type="radio"
-                                            name="studentAge"
-                                            value="under16"
-                                            checked={studentAge === 'under16'}
-                                            onChange={e => setStudentAge(e.target.value)}
-                                            required
-                                            className="w-4 h-4 text-purple-600"
-                                        />
-                                        <span className="text-sm font-bold text-gray-700">Under 16</span>
-                                    </label>
-                                </div>
-                            </div>
-
-                            {/* Parental Consent - shown only for under-16 */}
-                            {studentAge === 'under16' && (
-                                <div className="bg-yellow-50 border-2 border-yellow-200 rounded-xl p-4 space-y-3">
-                                    <p className="text-xs font-bold text-yellow-900 uppercase">Parental Consent Required (UK GDPR)</p>
-                                    <div>
-                                        <label className="block text-xs font-bold text-gray-700 mb-2">Are you the parent/guardian?</label>
-                                        <div className="flex gap-3">
-                                            <label className={`flex-1 flex items-center justify-center gap-2 p-3 border-2 rounded-xl cursor-pointer transition-all ${isParent === true ? 'border-yellow-600 bg-yellow-100' : 'border-yellow-300 bg-white hover:border-yellow-400'}`}>
-                                                <input
-                                                    type="radio"
-                                                    name="isParent"
-                                                    value="yes"
-                                                    checked={isParent === true}
-                                                    onChange={() => { setIsParent(true); setParentEmail(''); }}
-                                                    required
-                                                    className="w-4 h-4 text-yellow-600"
-                                                />
-                                                <span className="text-sm font-bold text-gray-700">Yes</span>
-                                            </label>
-                                            <label className={`flex-1 flex items-center justify-center gap-2 p-3 border-2 rounded-xl cursor-pointer transition-all ${isParent === false ? 'border-yellow-600 bg-yellow-100' : 'border-yellow-300 bg-white hover:border-yellow-400'}`}>
-                                                <input
-                                                    type="radio"
-                                                    name="isParent"
-                                                    value="no"
-                                                    checked={isParent === false}
-                                                    onChange={() => setIsParent(false)}
-                                                    required
-                                                    className="w-4 h-4 text-yellow-600"
-                                                />
-                                                <span className="text-sm font-bold text-gray-700">No</span>
-                                            </label>
-                                        </div>
-                                    </div>
-
-                                    {isParent === false && (
-                                        <div className="animate-in slide-in-from-top-2 duration-300">
-                                            <label className="block text-xs font-bold text-gray-700 mb-2">Parent/Guardian Email *</label>
-                                            <input
-                                                type="email"
-                                                required
-                                                value={parentEmail}
-                                                onChange={e => setParentEmail(e.target.value)}
-                                                placeholder="parent@example.com"
-                                                className="w-full px-4 py-3 rounded-xl border-2 border-yellow-300 focus:border-yellow-500 outline-none"
-                                            />
-                                            <p className="text-xs text-yellow-800 mt-2">
-                                                We'll send a consent confirmation email to the parent/guardian before finalizing this booking.
-                                            </p>
-                                        </div>
-                                    )}
-
-                                    {isParent === true && (
-                                        <label className="flex items-start gap-3 p-3 bg-white rounded-lg cursor-pointer hover:bg-yellow-50 transition-colors border-2 border-yellow-300">
-                                            <input type="checkbox" required className="mt-1 w-4 h-4 text-yellow-600 rounded border-gray-300 focus:ring-yellow-500" />
-                                            <span className="text-xs text-gray-700 leading-tight">
-                                                I confirm that I am the parent/legal guardian of this student and consent to the processing of their personal data as described in the <a href="/privacy" target="_blank" className="text-purple-600 underline">Privacy Policy</a>.
-                                            </span>
-                                        </label>
-                                    )}
-                                </div>
-                            )}
-
-                            <label className="flex items-start gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors">
-                                <input type="checkbox" required checked={gdprConsent} onChange={e => setGdprConsent(e.target.checked)} className="mt-1 w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500" />
-                                <span className="text-xs text-gray-600 leading-tight">
-                                    I agree to the <a href="/terms" target="_blank" className="text-purple-600 underline">Terms of Service</a> and <a href="/privacy" target="_blank" className="text-purple-600 underline">Privacy Policy</a>.
-                                </span>
-                            </label>
-
-                            <div className="flex gap-3 pt-2">
-                                <button type="button" onClick={() => setShowBookingModal(false)} className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition-all">Cancel</button>
-                                <button type="submit" className="flex-1 py-3 bg-purple-600 text-white rounded-xl font-bold shadow-lg hover:bg-purple-700 transition-all text-sm">
-                                    Confirm Free Booking
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            )}
-
-            {/* Success / Confirmation Modal */}
-            {confirmationData && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setConfirmationData(null)}>
-                    <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full animate-in zoom-in-95 text-center" onClick={e => e.stopPropagation()}>
-                        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <Check className="text-green-600" size={32} />
-                        </div>
-                        <h3 className="text-2xl font-bold text-gray-800 mb-2">Booking Confirmed!</h3>
-                        <p className="text-gray-600 mb-6">
-                            You're all set for <strong>{new Date(confirmationData.date).toLocaleDateString()}</strong> at <strong>{confirmationData.time}</strong>.
-                            A confirmation email has been sent to {confirmationData.email}.
-                        </p>
-
-                        <a
-                            href={generateGoogleCalendarUrl(confirmationData)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="block w-full py-3 mb-3 bg-white border-2 border-gray-200 text-gray-600 font-bold rounded-xl hover:border-blue-200 hover:text-blue-600 transition-all flex items-center justify-center gap-2"
-                        >
-                            <Calendar size={18} /> Add to Google Calendar
-                        </a>
-
-                        <button onClick={() => setConfirmationData(null)} className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold shadow-lg hover:bg-purple-700 transition-all">
-                            Close
-                        </button>
-                    </div>
-                </div>
-            )}
-        </div >
     );
 };
 

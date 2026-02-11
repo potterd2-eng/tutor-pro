@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, User, Video, Trash2, GraduationCap, ArrowRight, Settings, Check, X, Clock, AlertCircle, CheckCircle, ChevronLeft, ChevronRight, Shield, Calendar, MessageSquare } from 'lucide-react';
+import { Plus, User, Video, Trash2, GraduationCap, ArrowRight, Settings, Check, X, Clock, AlertCircle, CheckCircle, ChevronLeft, ChevronRight, Shield, Calendar, MessageSquare, TrendingUp, Mail } from 'lucide-react';
 import { emailService } from '../utils/email';
 
 const TeacherDashboard = () => {
@@ -12,11 +12,14 @@ const TeacherDashboard = () => {
     const [error, setError] = useState('');
 
     const [activeTab, setActiveTab] = useState('students'); // 'students', 'slots', 'earnings', 'messages'
+    const [messageType, setMessageType] = useState('student'); // 'student' or 'parent'
     const [students, setStudents] = useState([]);
     const [newStudentName, setNewStudentName] = useState('');
     const [chatMessages, setChatMessages] = useState({});
     const [newMessage, setNewMessage] = useState('');
     const [activeChatStudent, setActiveChatStudent] = useState(null);
+    const [parents, setParents] = useState([]);
+    const [activeChatParent, setActiveChatParent] = useState(null);
 
     // Unified Schedule State (Used for both Consultations and Lessons)
     const [weeklySchedule, setWeeklySchedule] = useState(() => {
@@ -52,6 +55,9 @@ const TeacherDashboard = () => {
         return defaultSchedule;
     });
 
+    // Notification State
+    const [notification, setNotification] = useState(null);
+
     // Slots State
     const [slots, setSlots] = useState([]); // Consultation Slots (15m)
     const [lessonSlots, setLessonSlots] = useState([]); // Paid Lesson Slots (1h)
@@ -66,7 +72,11 @@ const TeacherDashboard = () => {
 
     // Recurring Booking State
     const [showRecurringModal, setShowRecurringModal] = useState(false);
-    const [recurringConfig, setRecurringConfig] = useState({ studentId: '', startDate: '', time: '', weeks: 4 });
+    const [recurringConfig, setRecurringConfig] = useState({ studentId: '', startDate: '', time: '', weeks: 4, subject: 'Maths GCSE' });
+
+    // Individual Booking State
+    const [showIndividualBookingModal, setShowIndividualBookingModal] = useState(false);
+    const [individualBookingConfig, setIndividualBookingConfig] = useState({ studentId: '', date: '', time: '', subject: 'Maths GCSE' });
 
     // Reschedule Confirmation State
     const [rescheduleConfirm, setRescheduleConfirm] = useState(null); // { booking, action: 'approve' | 'deny' }
@@ -82,9 +92,31 @@ const TeacherDashboard = () => {
         return `${h12}:${minutes} ${ampm}`;
     };
 
+    const formatName = (str) => {
+        if (!str) return '';
+        return str.split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+            .join(' ');
+    };
+
+    const generateTimeOptions = () => {
+        const options = [];
+        for (let h = 0; h < 24; h++) {
+            for (let m = 0; m < 60; m += 15) {
+                const hour = h.toString().padStart(2, '0');
+                const min = m.toString().padStart(2, '0');
+                const time = `${hour}:${min}`;
+                options.push({ value: time, label: formatTime(time) });
+            }
+        }
+        return options;
+    };
+
+    const timeOptions = generateTimeOptions();
+
     // Teacher Reschedule State
     const [rescheduleTarget, setRescheduleTarget] = useState(null); // { booking, mode: 'single' | 'series' }
-    const [rescheduleConfig, setRescheduleConfig] = useState({ newDate: '', newTime: '', applyToSeries: false });
+    const [rescheduleConfig, setRescheduleConfig] = useState({ newDate: '', newTime: '14:00', applyToSeries: false });
 
     // Delete Confirmation State
     const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, type: 'slot' | 'booking', data }
@@ -133,6 +165,9 @@ const TeacherDashboard = () => {
         const storedStudents = localStorage.getItem('tutor_students');
         if (storedStudents) setStudents(JSON.parse(storedStudents));
 
+        const storedParents = localStorage.getItem('tutor_parents');
+        if (storedParents) setParents(JSON.parse(storedParents));
+
         // Load chat messages (per-student threads)
         const messages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
         setChatMessages(messages);
@@ -168,21 +203,21 @@ const TeacherDashboard = () => {
         };
     }, []);
 
-    // Mark messages as read when a student chat is active
+    // Mark messages as read when a chat is active
     useEffect(() => {
         if (activeTab === 'messages' && activeChatStudent) {
-            const studentName = activeChatStudent.name;
+            const threadKey = activeChatStudent.threadKey;
             const messages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
 
-            // Check if there are any unread messages from the student
-            const thread = messages[studentName] || [];
+            // Check if there are any unread messages in the thread
+            const thread = messages[threadKey] || [];
             const hasUnread = thread.some(m => m.sender !== 'Davina' && !m.read);
 
             if (hasUnread) {
                 const updatedThread = thread.map(m =>
                     m.sender !== 'Davina' ? { ...m, read: true } : m
                 );
-                const updatedMessages = { ...messages, [studentName]: updatedThread };
+                const updatedMessages = { ...messages, [threadKey]: updatedThread };
 
                 // Update state and localStorage
                 setChatMessages(updatedMessages);
@@ -204,8 +239,8 @@ const TeacherDashboard = () => {
     // Outstanding = Completed lessons that are NOT marked as 'Paid'
     // This is work already done but money not yet received.
     const completedUnpaid = sessionHistory
-        .filter(s => (!s.paymentStatus || s.paymentStatus.toLowerCase() !== 'paid') && s.type !== 'consultation' && s.subject !== 'Free Consultation')
-        .reduce((sum, s) => sum + (Number(s.cost) || 30), 0);
+        .filter(s => (!s.paymentStatus || s.paymentStatus.toLowerCase() !== 'paid') && s.subject !== 'Free Consultation')
+        .reduce((sum, s) => sum + (Number(s.cost) || (s.type === 'consultation' ? 0 : 30)), 0);
 
     // Upcoming = Bookings in the future
     const futureBookings = bookings.filter(b =>
@@ -218,88 +253,50 @@ const TeacherDashboard = () => {
 
     // Real Outstanding = Completed Unpaid (Past)
     // Projected = Past Unpaid + Future Booked
-    const outstandingEarnings = completedUnpaid;
-    const totalPending = completedUnpaid + futureEarnings;
-
     // Monthly Projections (Actual + Projected)
     const monthlyProjections = [0, 1, 2].map(offset => {
         const d = new Date(currentYear, currentMonth + offset, 1);
         const targetMonth = d.getMonth();
         const targetYear = d.getFullYear();
-        const monthName = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        const monthName = d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
 
         // Combined source for earnings calculation
         const allItems = [...bookings, ...sessionHistory];
 
-        // Helper: Is this the first lesson of a recurring series?
-        // We only attribute the £280 to the START of the series (Cash Flow view)
-        const isBillableDate = (item) => {
+        // Filter items that fall in this month and are not cancelled
+        const monthItems = allItems.filter(item => {
             if (item.status === 'cancelled') return false;
-
-            // If part of a series, only count if it's the first one (or explicitly marked as cost > 0)
-            // However, existing data might have cost spread out (e.g. £28).
-            // We want to force Cash Flow view: Multiples of 30 or 280.
-
-            if (item.recurringId) {
-                // Find all items in this series to find the start date
-                const seriesItems = allItems.filter(i => i.recurringId === item.recurringId);
-                seriesItems.sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
-
-                const firstItem = seriesItems[0];
-                // If this item is the first item, IT is the billable event.
-                // We attribute the FULL £280 to this first item's date.
-                if (item.id === firstItem.id) {
-                    // Check if this billable event falls in the target month
-                    const pDate = new Date(item.date);
-                    return pDate.getMonth() === targetMonth && pDate.getFullYear() === targetYear;
-                }
-                return false; // Subsequent lessons in block are £0 in Cash Flow view
-            }
-
-            // Non-recurring: Billable on lesson date
             const lDate = new Date(item.date);
-            return lDate.getMonth() === targetMonth && lDate.getFullYear() === targetYear && item.type !== 'consultation';
-        };
-
-        const revenueItems = allItems.filter(isBillableDate);
-
-        // Sum up costs: Force standard rates if odd data found
-        const projectedEarnings = revenueItems.reduce((sum, item) => {
-            let val = 0;
-            if (item.recurringId) {
-                // Block Booking: Always £280
-                val = 280;
-            } else {
-                // Single Lesson: Default to £30 (User requested multiples of 30)
-                // Use item.cost if it looks like a standard rate (30, 45, etc), otherwise 30.
-                // Or just trust cost if it's >= 30.
-                val = Number(item.cost) || 30;
-                // Fix for the £44 issue: if it's weird, snap to 30? 
-                // Let's assume 30 is the base.
-                if (val % 5 !== 0) val = 30; // Heuristic to clean messy data (e.g. 28, 44)
-            }
-            return sum + val;
-        }, 0);
-
-        // 2. Count Lessons & Consultations
-        const monthActivity = bookings.filter(b => {
-            const bDate = new Date(b.date);
-            return bDate.getMonth() === targetMonth && bDate.getFullYear() === targetYear && b.status !== 'cancelled';
+            return lDate.getMonth() === targetMonth && lDate.getFullYear() === targetYear;
         });
 
-        const bookedLessons = monthActivity.filter(b => b.type !== 'consultation' && b.subject !== 'Free Consultation').length;
-        const consultations = monthActivity.filter(b => b.type === 'consultation' || b.subject === 'Free Consultation').length;
+        const bookedLessons = monthItems.filter(i => i.type === 'lesson').length;
+        const consultations = monthItems.filter(i => i.type === 'consultation').length;
+        const projectedEarnings = monthItems.reduce((sum, item) => sum + (Number(item.cost) || 0), 0);
 
         return {
             monthName,
+            projectedEarnings,
             bookedLessons,
-            consultations,
-            projectedEarnings
+            consultations
         };
     });
 
+    const earnedThisMonth = sessionHistory
+        .filter(s => {
+            const lDate = new Date(s.date);
+            return s.paymentStatus?.toLowerCase() === 'paid' &&
+                lDate.getMonth() === currentMonth &&
+                lDate.getFullYear() === currentYear;
+        })
+        .reduce((sum, s) => sum + (Number(s.cost) || 30), 0);
+
     const projectedThisMonth = monthlyProjections[0].projectedEarnings;
+    const lessonsThisMonth = monthlyProjections[0].bookedLessons;
+    const outstandingEarnings = completedUnpaid;
+    const totalPending = completedUnpaid + futureEarnings;
     const paidBookingsThisMonth = []; // Deprecated/Unused in new logic, keeping var structure if verified unused elsewhere
+
 
     // Save Unified Schedule
     useEffect(() => {
@@ -315,7 +312,7 @@ const TeacherDashboard = () => {
     const addStudent = (e) => {
         e.preventDefault();
         if (!newStudentName.trim()) return;
-        const newStudent = { id: Date.now().toString(), name: newStudentName };
+        const newStudent = { id: Date.now().toString(), name: formatName(newStudentName) };
         const updated = [...students, newStudent];
         saveStudents(updated);
         setNewStudentName('');
@@ -438,7 +435,7 @@ const TeacherDashboard = () => {
         };
         // Conflict check
         if (lessonSlots.some(s => s.date === dateStr && s.time === timeStr)) {
-            alert('Slot already exists!');
+            setNotification({ type: 'error', message: 'Slot already exists!' });
             return;
         }
 
@@ -470,96 +467,154 @@ const TeacherDashboard = () => {
     // Recurring Booking Logic
     const handleRecurringBooking = (e) => {
         e.preventDefault();
-        const { studentId, startDate, time, weeks } = recurringConfig;
-        if (!studentId || !startDate || !time || !weeks) {
-            alert("Please fill in all fields.");
-            return;
-        }
+        try {
+            const { studentId, startDate, time, weeks, subject } = recurringConfig;
 
-        const student = students.find(s => s.id === studentId);
-        if (!student) return;
-
-        const newBookings = [];
-        const newSlots = []; // Track slots to add/update
-        const recurringId = Date.now().toString() + '-REC'; // Unique ID for this series
-
-        let currentDate = new Date(startDate);
-
-        // Check availability loop
-        for (let i = 0; i < weeks; i++) {
-            const dateStr = currentDate.toISOString().split('T')[0];
-
-            // Check for existing bookings/blocks
-            // We need to check if ANY slot overlaps or is already booked
-            // For simplicity in this text-based env, we'll check precise 1:1 match first
-            // But ideally we check robust overlap. 
-            // In our current system, 'lessonSlots' holds the truth.
-
-            const existingSlot = lessonSlots.find(s => s.date === dateStr && s.time === time);
-            if (existingSlot && existingSlot.bookedBy) {
-                alert(`Conflict on Week ${i + 1} (${dateStr}): Slot already booked.`);
+            if (!studentId || !startDate || !time || !weeks) {
+                setNotification({ type: 'error', message: "Please fill in all required fields." });
                 return;
             }
 
-            // Create Booking
-            newBookings.push({
-                id: `bk-${dateStr}-${time}-${Date.now()}`,
-                student: student.name,
-                studentId: student.id,
-                date: dateStr,
-                time: time,
-                type: 'lesson',
-                status: 'confirmed',
-                recurringId: recurringId,
-                seriesIndex: i + 1,
-                totalSeries: weeks,
-                cost: (weeks === 10) ? (i === 0 ? 280 : 0) : 30, // Bulk price for 10 weeks, else standard 30
-                paymentStatus: 'Due'
-            });
+            const student = students.find(s => s.id == studentId);
+            if (!student) {
+                setNotification({ type: 'error', message: "Student not found." });
+                return;
+            }
 
-            // Handle Slot (Create if doesn't exist, Update if does)
-            if (existingSlot) {
-                newSlots.push({ ...existingSlot, bookedBy: student.name });
-            } else {
-                newSlots.push({
-                    id: `gen-${dateStr}-${time}`,
+            const newBookings = [];
+            const newSlots = [];
+            const recurringId = Date.now().toString() + '-REC';
+
+            let currentDate = new Date(startDate);
+            if (isNaN(currentDate.getTime())) {
+                setNotification({ type: 'error', message: "Invalid start date." });
+                return;
+            }
+
+            for (let i = 0; i < weeks; i++) {
+                const dateStr = currentDate.toISOString().split('T')[0];
+
+                const existingSlot = (lessonSlots || []).find(s => s.date === dateStr && s.time === time);
+                if (existingSlot && existingSlot.bookedBy) {
+                    setNotification({ type: 'error', message: `Conflict on Week ${i + 1} (${new Date(dateStr).toLocaleDateString('en-GB')}): Slot already booked.` });
+                    return;
+                }
+
+                newBookings.push({
+                    id: `bk-${dateStr}-${time}-${Date.now()}-${i}`,
+                    student: student.name,
+                    studentId: student.id,
                     date: dateStr,
                     time: time,
-                    bookedBy: student.name,
-                    generated: false // Manual override effectively
+                    subject: subject || 'Lesson',
+                    type: 'lesson',
+                    status: 'confirmed',
+                    recurringId: recurringId,
+                    seriesIndex: i + 1,
+                    totalSeries: weeks,
+                    cost: (weeks === 10) ? (i === 0 ? 280 : 0) : 30,
+                    paymentStatus: 'Due'
                 });
+
+                if (existingSlot) {
+                    newSlots.push({ ...existingSlot, bookedBy: student.name });
+                } else {
+                    newSlots.push({
+                        id: `gen-${dateStr}-${time}`,
+                        date: dateStr,
+                        time: time,
+                        bookedBy: student.name,
+                        generated: false
+                    });
+                }
+
+                currentDate.setDate(currentDate.getDate() + 7);
             }
 
-            // Advance 1 week
-            currentDate.setDate(currentDate.getDate() + 7);
+            const updatedBookings = [...(bookings || []), ...newBookings];
+            let updatedSlots = [...(lessonSlots || [])];
+
+            newSlots.forEach(newSlot => {
+                const idx = updatedSlots.findIndex(s => s.date === newSlot.date && s.time === newSlot.time);
+                if (idx >= 0) {
+                    updatedSlots[idx] = newSlot;
+                } else {
+                    updatedSlots.push(newSlot);
+                }
+            });
+
+            setBookings(updatedBookings);
+            setLessonSlots(updatedSlots);
+
+            localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+            localStorage.setItem('tutor_lesson_slots', JSON.stringify(updatedSlots));
+
+            window.dispatchEvent(new Event('storage'));
+            setScheduleUpdateTrigger(prev => prev + 1);
+
+            setShowRecurringModal(false);
+            setRecurringConfig({ studentId: '', startDate: '', time: '', weeks: 4, subject: 'Maths GCSE' });
+
+            // Success notification to confirm it worked
+            setNotification({ type: 'success', message: `${weeks} lessons successfully booked!` });
+        } catch (error) {
+            console.error("Booking Error:", error);
+            setNotification({ type: 'error', message: "Error creating bookings: " + error.message });
+        }
+    };
+
+    // Individual Booking Logic
+    const handleIndividualBooking = (e) => {
+        e.preventDefault();
+        const { studentId, date, time, subject } = individualBookingConfig;
+        if (!studentId || !date || !time || !subject) {
+            setNotification({ type: 'error', message: "Please fill in all fields." });
+            return;
         }
 
-        // Apply Changes
-        const updatedBookings = [...bookings, ...newBookings];
+        const student = students.find(s => s.id == studentId);
+        if (!student) {
+            setNotification({ type: 'error', message: "Student not found." });
+            return;
+        }
 
-        // Merge newSlots into lessonSlots
-        // We need to be careful not to duplicate.
-        let updatedSlots = [...lessonSlots];
-        newSlots.forEach(newSlot => {
-            const idx = updatedSlots.findIndex(s => s.date === newSlot.date && s.time === newSlot.time);
-            if (idx >= 0) {
-                updatedSlots[idx] = newSlot;
-            } else {
-                updatedSlots.push(newSlot);
-            }
-        });
+        // Check if slot is already booked
+        const existingBooking = bookings.find(b => b.date === date && b.time === time && b.status !== 'cancelled');
+        if (existingBooking) {
+            setNotification({ type: 'error', message: `Conflict: This time slot is already booked for ${existingBooking.student}.` });
+            return;
+        }
+
+        // Create single booking
+        const newBooking = {
+            id: `bk-${date}-${time}-${Date.now()}`,
+            student: student.name,
+            studentId: student.id,
+            date: date,
+            time: time,
+            subject: subject,
+            type: 'lesson',
+            status: 'confirmed',
+            recurringId: null, // Individual lesson
+            cost: 30,
+            paymentStatus: 'Due'
+        };
+
+        const updatedBookings = [...bookings, newBooking];
+
+        // Mark slot as booked in lessonSlots
+        const updatedLessonSlots = lessonSlots.map(s =>
+            (s.date === date && s.time === time) ? { ...s, bookedBy: student.name } : s
+        );
 
         setBookings(updatedBookings);
-        setLessonSlots(updatedSlots);
-
+        setLessonSlots(updatedLessonSlots);
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
-        localStorage.setItem('tutor_lesson_slots', JSON.stringify(updatedSlots));
+        localStorage.setItem('tutor_lesson_slots', JSON.stringify(updatedLessonSlots));
         window.dispatchEvent(new Event('storage'));
-        setScheduleUpdateTrigger(prev => prev + 1); // Force calendar refresh
 
-        setShowRecurringModal(false);
-        setRecurringConfig({ studentId: '', startDate: '', time: '', weeks: 4 });
-        // alert(`Successfully booked ${weeks} lessons for ${student.name}!`); // Removed for smoother UX
+        setShowIndividualBookingModal(false);
+        setIndividualBookingConfig({ studentId: '', date: '', time: '', subject: 'Maths GCSE' });
     };
 
     // Teacher Reschedule Logic
@@ -570,6 +625,24 @@ const TeacherDashboard = () => {
             newTime: booking.time,
             applyToSeries: !!booking.recurringId
         });
+    };
+
+    const allowPayLater = (booking) => {
+        if (!window.confirm(`Allow ${booking.student} to pay later for this session?\n\nThis will grant them immediate access to the classroom.`)) return;
+
+        const updatedHistory = (JSON.parse(localStorage.getItem('tutor_session_history')) || []).map(h =>
+            h.id === booking.id ? { ...h, paymentStatus: 'Due (Exception)' } : h
+        );
+        localStorage.setItem('tutor_session_history', JSON.stringify(updatedHistory));
+
+        const updatedBookings = bookings.map(b =>
+            b.id === booking.id ? { ...b, paymentStatus: 'Due (Exception)' } : b
+        );
+        setBookings(updatedBookings);
+        localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+
+        window.dispatchEvent(new Event('storage'));
+        setNotification({ type: 'success', message: `Exception granted for ${booking.student}. They can now join the lesson.` });
     };
 
     const confirmTeacherReschedule = () => {
@@ -584,7 +657,7 @@ const TeacherDashboard = () => {
         // Logic: Calculate offset for series or just single check
         // ... (Simplified: For now, we only allow rescheduling Single instances or we'd need complex date math for series shifting)
         // Let's restrict Series Reschedule to "Cancel Future & Rebook" or just "Shift All by X days"?
-        // SIMPLEST MVP: Only allow rescheduling ONE Lesson at a time for approval first. 
+        // SIMPLEST MVP: Only allow rescheduling ONE Lesson at a time for approval first.
         // OR: If it's a series, we just propose a change for THIS meeting.
 
         // Revised Plan from Implementation: "Single" or "Series" options.
@@ -683,7 +756,8 @@ const TeacherDashboard = () => {
                     // Clean up request fields
                     requestedDate: undefined,
                     requestedTime: undefined,
-                    requestedSlotId: undefined
+                    requestedSlotId: undefined,
+                    studentProposed: undefined // Clear student reschedule proposal
                 };
             }
             return b;
@@ -911,12 +985,6 @@ const TeacherDashboard = () => {
                                         <User size={20} className="text-teal-500" /> My Students
                                         <span className="bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full text-xs">{students.length}</span>
                                     </h2>
-                                    <button
-                                        onClick={() => setShowRecurringModal(true)}
-                                        className="bg-purple-100 text-purple-700 px-4 py-2 rounded-xl font-bold hover:bg-purple-200 transition-colors flex items-center gap-2 text-sm"
-                                    >
-                                        <Calendar size={18} /> Book Recurring Lessons
-                                    </button>
                                 </div>
 
                                 {students.length === 0 ? (
@@ -925,23 +993,57 @@ const TeacherDashboard = () => {
                                     </div>
                                 ) : (
                                     <div className="grid gap-3">
-                                        {students.map(student => (
-                                            <div key={student.id} className="group bg-white p-4 rounded-xl shadow-sm border border-gray-100 hover:border-purple-200 transition-all flex items-center justify-between">
-                                                <div className="flex items-center gap-4">
-                                                    <div className="w-12 h-12 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center font-bold text-xl group-hover:scale-110 transition-transform">
-                                                        {student.name.charAt(0).toUpperCase()}
+                                        {students.map(student => {
+                                            const parent = (JSON.parse(localStorage.getItem('tutor_parents')) || []).find(p => p.linkedStudents.includes(student.id));
+                                            return (
+                                                <div key={student.id} className="group bg-white p-5 rounded-2xl shadow-sm border border-gray-100 hover:border-purple-200 transition-all flex items-center justify-between">
+                                                    <div className="flex items-center gap-4">
+                                                        <div className="w-14 h-14 bg-gradient-to-br from-purple-50 to-purple-100 text-purple-600 rounded-2xl flex items-center justify-center font-bold text-2xl group-hover:scale-105 transition-transform shadow-sm">
+                                                            {student.name?.charAt(0).toUpperCase() || '?'}
+                                                        </div>
+                                                        <div>
+                                                            <h3 className="font-bold text-gray-800 text-lg flex items-center gap-2">
+                                                                {student.name}
+                                                                {!sessionHistory.some(s => (s.studentName === student.name || s.student === student.name) && s.paymentStatus === 'Paid') && (
+                                                                    <span className="text-[10px] bg-green-100 text-green-700 font-black px-1.5 py-0.5 rounded animate-pulse">NEW</span>
+                                                                )}
+                                                                <span className="text-[10px] text-gray-400 font-bold uppercase tracking-widest bg-gray-50 px-2 py-0.5 rounded border border-gray-100">ID: {student.id}</span>
+                                                            </h3>
+                                                            {parent ? (
+                                                                <div className="flex flex-col mt-1">
+                                                                    <p className="text-xs text-purple-600 font-bold flex items-center gap-1">
+                                                                        <User size={12} /> Parent: {parent.name}
+                                                                    </p>
+                                                                </div>
+                                                            ) : (
+                                                                <p className="text-xs text-gray-400 italic mt-1">No parent linked</p>
+                                                            )}
+                                                        </div>
                                                     </div>
-                                                    <div>
-                                                        <h3 className="font-bold text-gray-800 text-lg">{student.name}</h3>
-                                                        <p className="text-xs text-gray-400">ID: {student.id}</p>
+                                                    <div className="flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <button onClick={() => {
+                                                            setActiveTab('messages');
+                                                            setMessageType('student');
+                                                            setActiveChatStudent({ ...student, threadKey: student.name });
+                                                        }} className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors" title="Message Student">
+                                                            <MessageSquare size={20} />
+                                                        </button>
+                                                        {parent && (
+                                                            <button onClick={() => {
+                                                                setActiveTab('messages');
+                                                                setMessageType('parent');
+                                                                setActiveChatStudent({ name: parent.name, email: parent.email, id: parent.email, threadKey: `parent_${parent.email}` });
+                                                            }} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Message Parent">
+                                                                <Mail size={20} />
+                                                            </button>
+                                                        )}
+                                                        <button onClick={() => removeStudent(student.id)} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Remove Student">
+                                                            <Trash2 size={18} />
+                                                        </button>
                                                     </div>
                                                 </div>
-                                                <div className="flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <button onClick={() => startLesson(student)} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 shadow-md transform hover:scale-105 transition-all"><Video size={18} /> Start Lesson</button>
-                                                    <button onClick={() => removeStudent(student.id)} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Remove Student"><Trash2 size={18} /></button>
-                                                </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 )}
                             </div>
@@ -965,7 +1067,7 @@ const TeacherDashboard = () => {
                                                             <AlertCircle size={24} />
                                                         ) : (
                                                             <>
-                                                                <span className="text-xs uppercase opacity-80">{new Date(booking.date).toLocaleDateString('en-US', { weekday: 'short' })}</span>
+                                                                <span className="text-xs uppercase opacity-80">{new Date(booking.date).toLocaleDateString('en-GB', { weekday: 'short' })}</span>
                                                                 <span className="text-lg">{new Date(booking.date).getDate()}</span>
                                                             </>
                                                         )}
@@ -978,16 +1080,27 @@ const TeacherDashboard = () => {
 
                                                         {booking.status === 'pending_reschedule' ? (
                                                             <div className="text-sm">
-                                                                <div className="text-gray-500 line-through text-xs">Current: {new Date(booking.date).toLocaleDateString()} at {formatTime(booking.time)}</div>
-                                                                <div className="text-orange-700 font-bold">Requested: {new Date(booking.requestedDate).toLocaleDateString()} at {formatTime(booking.requestedTime)}</div>
+                                                                <div className="text-gray-500 line-through text-xs">Current: {new Date(booking.date).toLocaleDateString('en-GB')} at {formatTime(booking.time)}</div>
+                                                                <div className="text-orange-700 font-bold">Requested: {new Date(booking.requestedDate).toLocaleDateString('en-GB')} at {formatTime(booking.requestedTime)}</div>
                                                             </div>
                                                         ) : (
-                                                            <p className="text-sm text-gray-500 flex items-center gap-2">
-                                                                <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${booking.type === 'consultation' ? 'bg-orange-100 text-orange-600' : 'bg-purple-100 text-purple-600'}`}>
-                                                                    {booking.type === 'consultation' ? 'Consultation' : 'Lesson'}
-                                                                </span>
-                                                                {new Date(booking.date).toLocaleDateString()} at {formatTime(booking.time)}
-                                                            </p>
+                                                            <div className="flex items-center gap-2">
+                                                                <p className="text-sm text-gray-500 flex items-center gap-2">
+                                                                    <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${booking.type === 'consultation' ? 'bg-orange-100 text-orange-600' : 'bg-purple-100 text-purple-600'}`}>
+                                                                        {booking.type === 'consultation' ? 'FREE MEETING' : (booking.subject || 'Lesson')}
+                                                                    </span>
+                                                                    {new Date(booking.date).toLocaleDateString('en-GB')} at {formatTime(booking.time)}
+                                                                </p>
+                                                                {booking.type !== 'consultation' && (
+                                                                    <div className="flex items-center" title={booking.paymentStatus?.toLowerCase() === 'paid' ? 'Paid' : 'Payment Due'}>
+                                                                        {booking.paymentStatus?.toLowerCase() === 'paid' ? (
+                                                                            <CheckCircle size={16} className="text-green-500" />
+                                                                        ) : (
+                                                                            <AlertCircle size={16} className="text-orange-500" />
+                                                                        )}
+                                                                    </div>
+                                                                )}
+                                                            </div>
                                                         )}
                                                     </div>
                                                 </div>
@@ -1028,8 +1141,17 @@ const TeacherDashboard = () => {
                                                                 }}
                                                                 className="bg-purple-600 text-white px-3 py-2 rounded-lg font-bold hover:bg-purple-700 shadow-md transition-all flex items-center gap-1 text-sm"
                                                             >
-                                                                <Video size={16} /> Join
+                                                                <Video size={16} /> {booking.type === 'consultation' ? 'Start Meeting' : 'Start Lesson'}
                                                             </button>
+                                                            {booking.paymentStatus?.toLowerCase() !== 'paid' && booking.paymentStatus?.toLowerCase() !== 'due (exception)' && booking.type !== 'consultation' && (
+                                                                <button
+                                                                    onClick={() => allowPayLater(booking)}
+                                                                    className="bg-orange-100 text-orange-600 px-3 py-2 rounded-lg font-bold hover:bg-orange-200 transition-all flex items-center gap-1 text-sm"
+                                                                    title="Allow student to join before paying"
+                                                                >
+                                                                    <Shield size={16} /> Allow Pay Later
+                                                                </button>
+                                                            )}
                                                             <button
                                                                 onClick={() => {
                                                                     if (window.confirm(`Cancel lesson with ${booking.student}?`)) {
@@ -1057,17 +1179,29 @@ const TeacherDashboard = () => {
                     </div>
                 ) : activeTab === 'slots' ? (
                     <div className="max-w-5xl mx-auto space-y-6 animate-in slide-in-from-right-4 duration-300">
-                        <div className="flex justify-between items-center mb-6">
+                        <div className="flex justify-between items-start mb-6">
                             <div>
                                 <h2 className="text-2xl font-bold text-gray-800">Availability Calendar</h2>
-                                <p className="text-gray-500">Manage your lesson slots by date.</p>
+                                <p className="text-gray-500">Manage your lesson slots and bookings.</p>
                             </div>
-                            <div className="flex gap-3">
+                            <div className="flex flex-col gap-2">
+                                <button
+                                    onClick={() => setShowIndividualBookingModal(true)}
+                                    className="flex items-center gap-2 px-4 py-2 bg-teal-100 hover:bg-teal-200 text-teal-700 rounded-lg font-bold transition-colors whitespace-nowrap"
+                                >
+                                    <Plus size={18} /> Book Individual Lesson
+                                </button>
+                                <button
+                                    onClick={() => setShowRecurringModal(true)}
+                                    className="flex items-center gap-2 px-4 py-2 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg font-bold transition-colors whitespace-nowrap"
+                                >
+                                    <Calendar size={18} /> Book Recurring Lessons
+                                </button>
                                 <button
                                     onClick={() => setShowScheduleModal(true)}
-                                    className="flex items-center gap-2 px-4 py-2 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg font-bold transition-colors"
+                                    className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-bold transition-colors whitespace-nowrap"
                                 >
-                                    <Settings size={18} /> Schedule & Availability
+                                    <Settings size={18} /> Availability
                                 </button>
                             </div>
                         </div>
@@ -1077,7 +1211,7 @@ const TeacherDashboard = () => {
                             {/* Calendar Header */}
                             <div className="flex items-center justify-between p-6 border-b border-gray-100">
                                 <h3 className="text-xl font-bold text-gray-800">
-                                    {currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                                    {currentDate.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}
                                 </h3>
                                 <div className="flex gap-2">
                                     <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ChevronLeft size={24} className="text-gray-600" /></button>
@@ -1163,7 +1297,7 @@ const TeacherDashboard = () => {
                                                         className={`text-[10px] px-2 py-1 rounded truncate font-bold border transition-all cursor-pointer hover:scale-105 ${getStudentColor(booking.student)}`}
                                                         title={booking.isFallback ? "Fallback Data" : "Click to Reschedule"}
                                                     >
-                                                        {formatTime(booking.time)} {booking.student}
+                                                        {formatTime(booking.time)} {booking.type === 'consultation' ? 'FREE: ' : 'LESSON: '}{booking.student}
                                                     </div>
                                                 ))}
 
@@ -1196,92 +1330,205 @@ const TeacherDashboard = () => {
                         </div>
                     </div>
                 ) : activeTab === 'earnings' ? (
-                    <div className="max-w-3xl mx-auto space-y-6 animate-in slide-in-from-right-4 duration-300">
+                    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                        {/* Top Stats Boxes */}
+                        <div className="grid md:grid-cols-3 gap-6">
+                            {/* Earned This Month - Green */}
+                            <div className="bg-[#10b981] p-8 rounded-2xl shadow-lg text-white">
+                                <div className="text-sm font-bold uppercase tracking-wider mb-4">Earned This Month</div>
+                                <div className="text-5xl font-black mb-2">£{earnedThisMonth}</div>
+                                <div className="text-sm opacity-90 font-medium">Received payments</div>
+                            </div>
 
-                        {/* Financial Summary */}
-                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                            <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
-                                <span className="text-2xl">📊</span> Financial Summary
-                            </h3>
-                            <div className="space-y-4">
-                                <div className="flex justify-between items-center py-2 border-b border-gray-50">
-                                    <span className="text-gray-600">Total Paid (All Time)</span>
-                                    <span className="font-bold text-green-600 text-lg">£{paidEarnings}</span>
+                            {/* Projected This Month - Purple */}
+                            <div className="bg-[#a855f7] p-8 rounded-2xl shadow-lg text-white">
+                                <div className="text-sm font-bold uppercase tracking-wider mb-4">Projected This Month</div>
+                                <div className="text-5xl font-black mb-2">£{projectedThisMonth}</div>
+                                <div className="text-sm opacity-90 font-medium">{lessonsThisMonth} lessons booked</div>
+                            </div>
+
+                            {/* Outstanding Balance - Orange */}
+                            <div className="bg-[#f97316] p-8 rounded-2xl shadow-lg text-white">
+                                <div className="text-sm font-bold uppercase tracking-wider mb-4">Outstanding Balance</div>
+                                <div className="text-5xl font-black mb-2">£{outstandingEarnings}</div>
+                                <div className="text-sm opacity-90 font-medium">Money owed (Completed work)</div>
+                            </div>
+                        </div>
+
+                        {/* Financial Summary Card */}
+                        <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+                            <div className="p-6 border-b border-gray-50 flex items-center gap-3">
+                                <div className="bg-fuchsia-50 p-2 rounded-lg">
+                                    <TrendingUp className="text-fuchsia-600" size={24} />
                                 </div>
-                                <div className="flex justify-between items-center py-2 border-b border-gray-50">
-                                    <span className="text-gray-600">Upcoming / Booked Lessons</span>
-                                    <span className="font-bold text-blue-600 text-lg">£{futureEarnings} <span className="text-sm text-gray-400 font-normal">({futureBookings.length} lessons)</span></span>
+                                <h2 className="text-xl font-bold text-gray-800">Financial Summary</h2>
+                            </div>
+                            <div className="p-8 space-y-6">
+                                <div className="flex items-center justify-between group">
+                                    <span className="text-gray-500 font-medium">Total Paid (All Time)</span>
+                                    <span className="text-2xl font-black text-[#10b981]">£{paidEarnings}</span>
                                 </div>
-                                <div className="flex justify-between items-center py-2">
-                                    <span className="text-gray-600">Total Projected (Owed + Upcoming)</span>
-                                    <span className="font-bold text-orange-600 text-lg">£{totalPending}</span>
+                                <div className="h-px bg-gray-50" />
+                                <div className="flex items-center justify-between group">
+                                    <span className="text-gray-500 font-medium">Upcoming / Booked Lessons</span>
+                                    <div className="text-right">
+                                        <span className="text-2xl font-black text-[#6366f1]">£{futureEarnings}</span>
+                                        <span className="text-sm text-gray-400 ml-2 font-bold">({futureBookings.length} lessons)</span>
+                                    </div>
+                                </div>
+                                <div className="h-px bg-gray-50" />
+                                <div className="flex items-center justify-between group">
+                                    <span className="text-gray-500 font-medium">Total Predicted Revenue (Paid + Upcoming)</span>
+                                    <span className="text-2xl font-black text-purple-600">£{paidEarnings + futureEarnings}</span>
                                 </div>
                             </div>
                         </div>
 
+                        {/* Upcoming Sessions in Earnings */}
+                        <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+                            <div className="p-6 border-b border-gray-50 flex items-center justify-between">
+                                <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3">
+                                    <Video className="text-indigo-500" /> Upcoming Scheduled Lessons
+                                </h2>
+                                <span className="bg-indigo-50 text-indigo-600 text-xs font-bold px-3 py-1 rounded-full">
+                                    {futureBookings.length} Lessons
+                                </span>
+                            </div>
+                            <div className="p-0">
+                                {futureBookings.length === 0 ? (
+                                    <div className="p-12 text-center text-gray-400 italic">No upcoming sessions booked.</div>
+                                ) : (
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full">
+                                            <thead>
+                                                <tr className="bg-gray-50/50 text-left border-b border-gray-50">
+                                                    <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Date & Time</th>
+                                                    <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Student</th>
+                                                    <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Subject</th>
+                                                    <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Fee</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-50">
+                                                {futureBookings.map((booking) => (
+                                                    <tr key={booking.id} className="hover:bg-gray-50/50 transition-colors">
+                                                        <td className="px-6 py-4">
+                                                            <div className="font-bold text-gray-900">{new Date(booking.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</div>
+                                                            <div className="text-xs text-indigo-500 font-medium uppercase tracking-tighter">{booking.time}</div>
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <div className="flex items-center gap-2">
+                                                                <div className="font-bold text-gray-700">{booking.student}</div>
+                                                                {booking.type !== 'consultation' && (
+                                                                    <div title={booking.paymentStatus?.toLowerCase() === 'paid' ? 'Paid' : 'Payment Due'}>
+                                                                        {booking.paymentStatus?.toLowerCase() === 'paid' ? (
+                                                                            <CheckCircle size={14} className="text-green-500" />
+                                                                        ) : (
+                                                                            <AlertCircle size={14} className="text-orange-500" />
+                                                                        )}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-sm text-gray-500">{booking.subject}</td>
+                                                        <td className="px-6 py-4 text-right">
+                                                            <span className="font-black text-gray-900">£{booking.cost || 30}</span>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
                         {/* 3-Month Projection */}
-                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                            <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
-                                <span className="text-2xl">🗓️</span> 3-Month Revenue Projection
-                            </h3>
-                            <div className="grid grid-cols-3 gap-4">
-                                {monthlyProjections.map((mp, i) => (
-                                    <div key={i} className={`p-4 rounded-xl text-center border ${i === 0 ? 'bg-purple-50 border-purple-100' : 'bg-gray-50 border-gray-100'}`}>
-                                        <div className="text-xs font-bold text-gray-400 uppercase mb-1">{mp.monthName}</div>
-                                        <div className="text-2xl font-bold text-gray-800">£{mp.projectedEarnings}</div>
-                                        <div className="text-xs text-gray-500 mt-2">
-                                            {mp.bookedLessons} Lessons • {mp.consultations} Consults
+                        <div>
+                            <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-3">
+                                <Calendar className="text-purple-600" /> 3-Month Revenue Projection
+                            </h2>
+                            <div className="grid md:grid-cols-3 gap-6">
+                                {monthlyProjections.map((month, idx) => (
+                                    <div key={idx} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 hover:border-purple-200 transition-all group relative overflow-hidden">
+                                        {idx === 0 && (
+                                            <div className="absolute top-4 right-4 bg-purple-50 text-purple-600 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest border border-purple-100">
+                                                Current
+                                            </div>
+                                        )}
+                                        <h3 className="font-bold text-gray-900 text-lg mb-6">{month.monthName}</h3>
+
+                                        <div className="space-y-4">
+                                            <div className="flex justify-between items-center">
+                                                <span className="text-sm font-medium text-gray-400">Booked Lessons</span>
+                                                <span className="font-black text-gray-700">{month.bookedLessons}</span>
+                                            </div>
+                                            <div className="flex justify-between items-center text-teal-600">
+                                                <span className="text-sm font-medium text-teal-600/60">Consultations</span>
+                                                <span className="font-black">{month.consultations}</span>
+                                            </div>
+
+                                            <div className="pt-4 mt-2 border-t border-gray-50 flex justify-between items-end">
+                                                <span className="text-sm font-bold text-gray-900">Projected</span>
+                                                <span className="text-3xl font-black text-purple-600">£{month.projectedEarnings}</span>
+                                            </div>
                                         </div>
                                     </div>
                                 ))}
                             </div>
                         </div>
 
-                        {/* Recent Completed Sessions with Refund Option */}
-                        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-                            <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
-                                <span className="text-2xl">📝</span> Recent Sessions
-                            </h3>
+                        {/* Recent History */}
+                        <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+                            <div className="p-6 border-b border-gray-50 flex items-center justify-between">
+                                <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3 font-display">
+                                    <Clock className="text-blue-500" /> Recent Sessions
+                                </h2>
+                            </div>
                             <div className="overflow-x-auto">
-                                <table className="w-full text-left text-sm">
+                                <table className="w-full">
                                     <thead>
-                                        <tr className="border-b border-gray-100">
-                                            <th className="py-3 font-bold text-gray-400 uppercase text-[10px]">Date</th>
-                                            <th className="py-3 font-bold text-gray-400 uppercase text-[10px]">Student</th>
-                                            <th className="py-3 font-bold text-gray-400 uppercase text-[10px]">Amount</th>
-                                            <th className="py-3 font-bold text-gray-400 uppercase text-[10px]">Status</th>
-                                            <th className="py-3 font-bold text-gray-400 uppercase text-[10px]">Action</th>
+                                        <tr className="bg-gray-50/50">
+                                            <th className="px-6 py-4 text-left text-xs font-black text-gray-400 uppercase tracking-widest">Date</th>
+                                            <th className="px-6 py-4 text-left text-xs font-black text-gray-400 uppercase tracking-widest">Student</th>
+                                            <th className="px-6 py-4 text-left text-xs font-black text-gray-400 uppercase tracking-widest">Amount</th>
+                                            <th className="px-6 py-4 text-left text-xs font-black text-gray-400 uppercase tracking-widest">Status</th>
+                                            <th className="px-6 py-4 text-right text-xs font-black text-gray-400 uppercase tracking-widest">Action</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-gray-50">
                                         {sessionHistory.length === 0 ? (
                                             <tr>
-                                                <td colSpan="5" className="py-8 text-center text-gray-400 italic">No completed sessions yet.</td>
+                                                <td colSpan="5" className="px-6 py-12 text-center text-gray-400 font-medium">
+                                                    No completed sessions yet.
+                                                </td>
                                             </tr>
                                         ) : (
-                                            sessionHistory.slice(-10).reverse().map(session => (
-                                                <tr key={session.id} className="hover:bg-gray-50/50 transition-colors">
-                                                    <td className="py-4 font-medium text-gray-700">{new Date(session.date).toLocaleDateString()}</td>
-                                                    <td className="py-4 font-bold text-gray-900">{session.studentName}</td>
-                                                    <td className="py-4 font-bold text-gray-900">£{session.cost || 30}</td>
-                                                    <td className="py-4">
-                                                        <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${session.paymentStatus === 'Paid' ? 'bg-green-100 text-green-700' :
-                                                            session.paymentStatus === 'Refunded' ? 'bg-red-100 text-red-700' :
-                                                                session.paymentStatus === 'Due (Exception)' ? 'bg-purple-100 text-purple-700 border border-purple-200' :
-                                                                    'bg-orange-100 text-orange-700'
-                                                            }`}>
-                                                            {session.paymentStatus}
-                                                        </span>
+                                            sessionHistory.slice(-10).reverse().map((session, idx) => (
+                                                <tr key={idx} className="hover:bg-gray-50/50 transition-colors">
+                                                    <td className="px-6 py-4 text-sm font-bold text-gray-600">{new Date(session.date).toLocaleDateString('en-GB')}</td>
+                                                    <td className="px-6 py-4 text-sm font-black text-gray-900">{session.studentName || session.student}</td>
+                                                    <td className="px-6 py-4 text-sm font-black text-gray-900">£{session.cost || 30}</td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm ${session.paymentStatus === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
+                                                                }`}>
+                                                                {session.paymentStatus || 'Due'}
+                                                            </span>
+                                                            {session.paymentStatus !== 'Paid' && session.paymentStatus !== 'Due (Exception)' && (
+                                                                <button
+                                                                    onClick={() => allowPayLater(session)}
+                                                                    className="p-1 text-orange-400 hover:text-orange-600 transition-colors"
+                                                                    title="Allow Pay Later"
+                                                                >
+                                                                    <Shield size={14} />
+                                                                </button>
+                                                            )}
+                                                        </div>
                                                     </td>
-                                                    <td className="py-4">
-                                                        {session.paymentStatus === 'Paid' && (
-                                                            <button
-                                                                onClick={() => handleRefund(session)}
-                                                                className="text-xs font-bold text-red-500 hover:underline"
-                                                            >
-                                                                Refund
-                                                            </button>
-                                                        )}
+                                                    <td className="px-6 py-4 text-right">
+                                                        <button className="text-xs font-bold text-purple-600 hover:text-purple-700 underline flex items-center gap-1 ml-auto">
+                                                            View Details <ArrowRight size={12} />
+                                                        </button>
                                                     </td>
                                                 </tr>
                                             ))
@@ -1297,50 +1544,114 @@ const TeacherDashboard = () => {
                             <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-3">
                                 <MessageSquare className="text-blue-500" /> Messages
                             </h2>
+                            <div className="bg-gray-100 p-1 rounded-xl flex gap-1">
+                                <button
+                                    onClick={() => {
+                                        setMessageType('student');
+                                        setActiveChatStudent(null);
+                                    }}
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${messageType === 'student' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                >
+                                    Students
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setMessageType('parent');
+                                        setActiveChatStudent(null);
+                                    }}
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${messageType === 'parent' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                >
+                                    Parents
+                                </button>
+                            </div>
                         </div>
 
                         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex" style={{ height: '600px' }}>
-                            {/* Student List Sidebar */}
+                            {/* List Sidebar */}
                             <div className="w-1/3 border-r border-gray-200 overflow-y-auto">
                                 <div className="p-4 bg-gray-50 border-b border-gray-200">
-                                    <h3 className="font-bold text-gray-700 text-sm uppercase">Students</h3>
+                                    <h3 className="font-bold text-gray-700 text-sm uppercase">{messageType === 'student' ? 'Students' : 'Parents'}</h3>
                                 </div>
-                                {students.length === 0 ? (
-                                    <div className="p-8 text-center text-gray-400 italic text-sm">
-                                        No students yet
-                                    </div>
-                                ) : (
-                                    <div className="divide-y divide-gray-100">
-                                        {students.map(student => {
-                                            const unreadCount = (chatMessages[student.name] || []).filter(m => m.sender !== 'Davina' && !m.read).length;
-                                            return (
-                                                <button
-                                                    key={student.id}
-                                                    onClick={() => setActiveChatStudent(student)}
-                                                    className={`w-full p-4 text-left hover:bg-gray-50 transition-colors ${activeChatStudent?.id === student.id ? 'bg-blue-50 border-l-4 border-blue-500' : ''}`}
-                                                >
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="w-10 h-10 bg-purple-100 text-purple-700 rounded-full flex items-center justify-center font-bold">
-                                                            {student.name.charAt(0).toUpperCase()}
-                                                        </div>
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="font-bold text-gray-800 truncate">{student.name}</div>
-                                                            <div className="text-xs text-gray-500 truncate">
-                                                                {(chatMessages[student.name] || []).length > 0
-                                                                    ? (chatMessages[student.name][chatMessages[student.name].length - 1].message.substring(0, 30) + (chatMessages[student.name][chatMessages[student.name].length - 1].message.length > 30 ? '...' : ''))
-                                                                    : 'No messages yet'}
+                                {messageType === 'student' ? (
+                                    students.length === 0 ? (
+                                        <div className="p-8 text-center text-gray-400 italic text-sm">No students yet</div>
+                                    ) : (
+                                        <div className="divide-y divide-gray-100">
+                                            {students.map(student => {
+                                                const threadKey = student.name;
+                                                const unreadCount = (chatMessages[threadKey] || []).filter(m => m.sender !== 'Davina' && !m.read).length;
+                                                return (
+                                                    <button
+                                                        key={student.id}
+                                                        onClick={() => setActiveChatStudent({ ...student, threadKey })}
+                                                        className={`w-full p-4 text-left hover:bg-gray-50 transition-colors ${activeChatStudent?.id === student.id ? 'bg-purple-50 border-l-4 border-purple-500' : ''}`}
+                                                    >
+                                                        <div className="flex items-center gap-3">
+                                                            <div className="w-10 h-10 bg-purple-100 text-purple-700 rounded-full flex items-center justify-center font-bold">
+                                                                {student.name.charAt(0).toUpperCase()}
                                                             </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="font-bold text-gray-800 truncate">{student.name}</div>
+                                                                <div className="text-xs text-gray-500 truncate">
+                                                                    {(chatMessages[threadKey] || []).length > 0
+                                                                        ? chatMessages[threadKey][chatMessages[threadKey].length - 1].message
+                                                                        : 'No messages yet'}
+                                                                </div>
+                                                            </div>
+                                                            {unreadCount > 0 && (
+                                                                <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">
+                                                                    {unreadCount}
+                                                                </span>
+                                                            )}
                                                         </div>
-                                                        {unreadCount > 0 && (
-                                                            <span className="bg-blue-500 text-white text-xs px-2 py-0.5 rounded-full">
-                                                                {unreadCount}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )
+                                ) : (
+                                    (() => {
+                                        const parents = JSON.parse(localStorage.getItem('tutor_parents')) || [];
+                                        return parents.length === 0 ? (
+                                            <div className="p-8 text-center text-gray-400 italic text-sm">No parents yet</div>
+                                        ) : (
+                                            <div className="divide-y divide-gray-100">
+                                                {parents.map(parent => {
+                                                    const threadKey = `parent_${parent.email}`;
+                                                    const unreadCount = (chatMessages[threadKey] || []).filter(m => m.sender !== 'Davina' && !m.read).length;
+                                                    return (
+                                                        <button
+                                                            key={parent.email}
+                                                            onClick={() => setActiveChatStudent({ name: parent.name, firstName: parent.firstName, email: parent.email, id: parent.email, threadKey })}
+                                                            className={`w-full p-4 text-left hover:bg-gray-50 transition-colors ${activeChatStudent?.id === parent.email ? 'bg-blue-50 border-l-4 border-blue-500' : ''}`}
+                                                        >
+                                                            <div className="flex items-center gap-3">
+                                                                <div className="w-10 h-10 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center font-bold">
+                                                                    {parent.name?.charAt(0).toUpperCase() || '?'}
+                                                                </div>
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className="font-bold text-gray-800 truncate">{parent.firstName || parent.name}</div>
+                                                                    <div className="text-[10px] text-blue-600 font-bold uppercase tracking-wider mb-1">
+                                                                        Child: {students.filter(s => parent.linkedStudents.includes(s.id)).map(s => s.name).join(', ') || 'Unknown'}
+                                                                    </div>
+                                                                    <div className="text-xs text-gray-500 truncate">
+                                                                        {(chatMessages[threadKey] || []).length > 0
+                                                                            ? chatMessages[threadKey][chatMessages[threadKey].length - 1].message
+                                                                            : 'No messages yet'}
+                                                                    </div>
+                                                                </div>
+                                                                {unreadCount > 0 && (
+                                                                    <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">
+                                                                        {unreadCount}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        );
+                                    })()
                                 )}
                             </div>
 
@@ -1354,26 +1665,35 @@ const TeacherDashboard = () => {
                                     <>
                                         {/* Chat Header */}
                                         <div className="p-4 bg-gray-50 border-b border-gray-200 flex items-center gap-3">
-                                            <div className="w-10 h-10 bg-purple-100 text-purple-700 rounded-full flex items-center justify-center font-bold">
-                                                {activeChatStudent.name.charAt(0).toUpperCase()}
+                                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${messageType === 'parent' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                                {activeChatStudent.name?.charAt(0).toUpperCase() || '?'}
                                             </div>
                                             <div>
-                                                <div className="font-bold text-gray-800">{activeChatStudent.name}</div>
-                                                <div className="text-xs text-gray-500">Student ID: {activeChatStudent.id}</div>
+                                                <div className="font-bold text-gray-800">
+                                                    {activeChatStudent.firstName || activeChatStudent.name} {messageType === 'parent' && '(Parent)'}
+                                                </div>
+                                                <div className="text-[10px] text-blue-600 font-bold uppercase tracking-widest">
+                                                    {messageType === 'parent' ? (
+                                                        `Child: ${students.filter(s => parents.find(p => p.email === activeChatStudent.id)?.linkedStudents.includes(s.id)).map(s => s.name).join(', ') || '?'}`
+                                                    ) : (
+                                                        `Student ID: ${activeChatStudent.id}`
+                                                    )}
+                                                </div>
+                                                <div className="text-xs text-gray-500">{messageType === 'parent' && `Email: ${activeChatStudent.email}`}</div>
                                             </div>
                                         </div>
 
                                         {/* Messages */}
                                         <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50">
-                                            {(chatMessages[activeChatStudent.name] || []).length === 0 ? (
+                                            {(chatMessages[activeChatStudent.threadKey] || []).length === 0 ? (
                                                 <div className="h-full flex items-center justify-center text-gray-400 italic">
                                                     No messages yet. Start the conversation!
                                                 </div>
                                             ) : (
-                                                chatMessages[activeChatStudent.name]?.map((msg, idx) => (
+                                                chatMessages[activeChatStudent.threadKey]?.map((msg, idx) => (
                                                     <div key={idx} className={`flex ${msg.sender === 'Davina' ? 'justify-end' : 'justify-start'} mb-4`}>
                                                         <div className={`max-w-[70%] px-4 py-3 rounded-2xl shadow-sm ${msg.sender === 'Davina' ? 'bg-gradient-to-br from-purple-500 to-purple-600 text-white rounded-br-md' : 'bg-white border-2 border-gray-100 text-gray-800 rounded-bl-md'}`}>
-                                                            <div className={`text-xs font-bold mb-2 ${msg.sender === 'Davina' ? 'text-purple-100' : 'text-gray-500'}`}>{msg.sender}</div>
+                                                            <div className={`text-xs font-bold mb-2 ${msg.sender === 'Davina' ? 'text-purple-100' : 'text-gray-500'}`}>{msg.sender === 'Davina' ? 'You' : msg.senderName || msg.sender}</div>
                                                             <div className="text-base leading-relaxed">{msg.message}</div>
                                                             <div className={`text-xs mt-2 ${msg.sender === 'Davina' ? 'text-purple-100' : 'text-gray-400'}`}>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                                                         </div>
@@ -1398,11 +1718,17 @@ const TeacherDashboard = () => {
                                                             };
                                                             const updatedMessages = {
                                                                 ...chatMessages,
-                                                                [activeChatStudent.name]: [...(chatMessages[activeChatStudent.name] || []), msg]
+                                                                [activeChatStudent.threadKey]: [...(chatMessages[activeChatStudent.threadKey] || []), msg]
                                                             };
                                                             setChatMessages(updatedMessages);
                                                             localStorage.setItem('chat_messages_v2', JSON.stringify(updatedMessages));
+                                                            const sentContent = newMessage;
                                                             setNewMessage('');
+                                                            window.dispatchEvent(new Event('storage'));
+
+                                                            if (activeChatStudent.email) {
+                                                                emailService.sendMessageNotification('Davina', activeChatStudent.email, sentContent);
+                                                            }
                                                         }
                                                     }}
                                                     placeholder="Type your message..."
@@ -1418,11 +1744,17 @@ const TeacherDashboard = () => {
                                                             };
                                                             const updatedMessages = {
                                                                 ...chatMessages,
-                                                                [activeChatStudent.name]: [...(chatMessages[activeChatStudent.name] || []), msg]
+                                                                [activeChatStudent.threadKey]: [...(chatMessages[activeChatStudent.threadKey] || []), msg]
                                                             };
                                                             setChatMessages(updatedMessages);
                                                             localStorage.setItem('chat_messages_v2', JSON.stringify(updatedMessages));
+                                                            const sentContent = newMessage;
                                                             setNewMessage('');
+                                                            window.dispatchEvent(new Event('storage'));
+
+                                                            if (activeChatStudent.email) {
+                                                                emailService.sendMessageNotification('Davina', activeChatStudent.email, sentContent);
+                                                            }
                                                         }
                                                     }}
                                                     className="bg-purple-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-purple-700 transition-all"
@@ -1438,7 +1770,6 @@ const TeacherDashboard = () => {
                     </div>
                 ) : null}
 
-
                 {/* Date Details Modal */}
                 {
                     selectedDate && (
@@ -1446,7 +1777,7 @@ const TeacherDashboard = () => {
                             <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-2xl w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                                 <div className="flex justify-between items-center mb-6">
                                     <h3 className="text-xl font-bold text-gray-900">
-                                        {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+                                        {selectedDate.toLocaleDateString('en-GB', { weekday: 'long', month: 'long', day: 'numeric' })}
                                     </h3>
                                     <button onClick={() => setSelectedDate(null)} className="p-2 hover:bg-gray-100 rounded-full text-gray-400">✕</button>
                                 </div>
@@ -1487,8 +1818,8 @@ const TeacherDashboard = () => {
                                                             </button>
                                                             <button
                                                                 onClick={() => {
-                                                                    if (window.confirm(`Delete lesson with ${booking.student}?`)) {
-                                                                        const updated = bookings.filter(b => b.id !== booking.id);
+                                                                    if (window.confirm(`Cancel lesson with ${booking.student}?`)) {
+                                                                        const updated = bookings.map(b => b.id === booking.id ? { ...b, status: 'cancelled' } : b);
                                                                         setBookings(updated);
                                                                         localStorage.setItem('tutor_bookings', JSON.stringify(updated));
                                                                         window.dispatchEvent(new Event('storage'));
@@ -1501,7 +1832,7 @@ const TeacherDashboard = () => {
                                                                 }}
                                                                 className="bg-red-100 text-red-600 border border-red-200 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-600 hover:text-white transition-all shadow-sm"
                                                             >
-                                                                Delete
+                                                                Cancel
                                                             </button>
                                                             {booking.recurringId && (
                                                                 <button
@@ -1531,7 +1862,7 @@ const TeacherDashboard = () => {
                                                                     }}
                                                                     className="bg-red-600 text-white border border-red-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 transition-all shadow-sm"
                                                                 >
-                                                                    Delete Series
+                                                                    Cancel Series
                                                                 </button>
                                                             )}
                                                         </div>
@@ -1560,12 +1891,15 @@ const TeacherDashboard = () => {
                                             </div>
                                             <div>
                                                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Time</label>
-                                                <input
+                                                <select
                                                     id="bookingTime"
-                                                    type="time"
-                                                    defaultValue="14:00"
                                                     className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-bold bg-white outline-none focus:border-purple-600"
-                                                />
+                                                    defaultValue="14:00"
+                                                >
+                                                    {timeOptions.map(opt => (
+                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                    ))}
+                                                </select>
                                             </div>
                                             <div className="col-span-2">
                                                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Subject / Topic</label>
@@ -1576,37 +1910,60 @@ const TeacherDashboard = () => {
                                                     className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-bold bg-white outline-none focus:border-purple-600"
                                                 />
                                             </div>
+                                            <div className="col-span-2 flex items-center gap-3 bg-fuchsia-50/50 p-4 rounded-xl border border-fuchsia-100">
+                                                <input
+                                                    id="bookingRecurring"
+                                                    type="checkbox"
+                                                    className="w-5 h-5 rounded border-gray-300 text-fuchsia-600 focus:ring-fuchsia-500"
+                                                />
+                                                <label htmlFor="bookingRecurring" className="text-sm font-bold text-fuchsia-900">
+                                                    Recurring Weekly (10 Weeks)
+                                                </label>
+                                            </div>
                                             <button
                                                 onClick={() => {
                                                     const name = document.getElementById('studentSelect').value;
                                                     const time = document.getElementById('bookingTime').value;
                                                     const subject = document.getElementById('bookingSubject').value;
+                                                    const isRecurring = document.getElementById('bookingRecurring').checked;
 
                                                     if (!name || !time) {
                                                         alert('Please select a student and time');
                                                         return;
                                                     }
 
-                                                    const newBooking = {
-                                                        id: Date.now().toString(),
-                                                        student: name,
-                                                        date: selectedDate.toISOString().split('T')[0],
-                                                        time: time,
-                                                        subject: subject || 'Individual Lesson',
-                                                        type: 'lesson',
-                                                        status: 'confirmed',
-                                                        notes: ''
-                                                    };
+                                                    const newBookings = [];
+                                                    const startDate = new Date(selectedDate);
+                                                    const numWeeks = isRecurring ? 10 : 1;
+                                                    const recurringId = isRecurring ? Date.now().toString() : null;
 
-                                                    const updated = [...bookings, newBooking];
+                                                    for (let i = 0; i < numWeeks; i++) {
+                                                        const bookingDate = new Date(startDate);
+                                                        bookingDate.setDate(startDate.getDate() + (i * 7));
+
+                                                        newBookings.push({
+                                                            id: (Date.now() + i).toString(),
+                                                            student: name,
+                                                            date: bookingDate.toISOString().split('T')[0],
+                                                            time: time,
+                                                            subject: subject || 'Individual Lesson',
+                                                            type: 'lesson',
+                                                            status: 'pending_approval',
+                                                            notes: '',
+                                                            recurringId: recurringId,
+                                                            proposedBy: 'teacher'
+                                                        });
+                                                    }
+
+                                                    const updated = [...bookings, ...newBookings];
                                                     setBookings(updated);
                                                     localStorage.setItem('tutor_bookings', JSON.stringify(updated));
                                                     window.dispatchEvent(new Event('storage'));
-                                                    alert(`Lesson booked for ${name}!`);
+                                                    alert(isRecurring ? `10 recurring lessons proposed for ${name}!` : `Lesson proposed for ${name}!`);
                                                 }}
                                                 className="col-span-2 py-2.5 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-xl font-bold shadow-md hover:from-purple-700 hover:to-purple-800 transition-all flex items-center justify-center gap-2"
                                             >
-                                                <Plus size={18} /> Book Lesson
+                                                <Plus size={18} /> Propose Lesson
                                             </button>
                                         </div>
                                     </div>
@@ -1617,39 +1974,22 @@ const TeacherDashboard = () => {
                                     <div>
                                         <h4 className="text-xs font-bold text-gray-400 uppercase mb-3 text-center">Add 1-Hour Open Slot</h4>
                                         <div className="flex gap-2">
-                                            <input
-                                                type="time"
+                                            <select
                                                 value={newLessonTime}
                                                 onChange={e => setNewLessonTime(e.target.value)}
-                                                className="flex-1 px-4 py-2 border border-gray-200 rounded-xl focus:border-purple-600 outline-none font-bold text-center"
-                                            />
+                                                className="flex-1 px-4 py-2 border border-gray-200 rounded-xl focus:border-purple-600 outline-none font-bold text-center appearance-none"
+                                            >
+                                                <option value="">Select Time</option>
+                                                {timeOptions.map(opt => (
+                                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                ))}
+                                            </select>
                                             <button
                                                 onClick={() => addLessonSlot(selectedDate.toISOString().split('T')[0], newLessonTime)}
                                                 className="bg-purple-600 text-white px-4 py-2 rounded-xl font-bold hover:bg-purple-700 transition-colors"
                                             >
                                                 Add Slot
                                             </button>
-                                        </div>
-                                    </div>
-
-                                    {/* Existing Slots List */}
-                                    <div>
-                                        <h4 className="text-xs font-bold text-gray-400 uppercase mb-3">Existing Slots</h4>
-                                        <div className="space-y-2 max-h-[200px] overflow-y-auto">
-                                            {lessonSlots.filter(s => s.date === selectedDate.toISOString().split('T')[0]).length === 0 ? (
-                                                <p className="text-sm text-gray-400 italic text-center py-4">No slots added for this date.</p>
-                                            ) : (
-                                                lessonSlots.filter(s => s.date === selectedDate.toISOString().split('T')[0]).map(slot => (
-                                                    <div key={slot.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
-                                                        <div className="flex items-center gap-3">
-                                                            <Clock size={16} className="text-gray-400" />
-                                                            <span className="font-bold text-gray-700">{formatTime(slot.time)} - 1h</span>
-                                                            {slot.bookedBy && <span className="text-[10px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-bold">Booked by {slot.bookedBy}</span>}
-                                                        </div>
-                                                        <button onClick={() => removeLessonSlot(slot.id)} className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-lg transition-colors"><Trash2 size={16} /></button>
-                                                    </div>
-                                                ))
-                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -1690,19 +2030,25 @@ const TeacherDashboard = () => {
                                                         {day.intervals.map((interval, iIndex) => (
                                                             <div key={iIndex} className="flex items-center gap-2">
                                                                 <Clock size={16} className="text-gray-400" />
-                                                                <input
-                                                                    type="time"
+                                                                <select
                                                                     value={interval.start}
                                                                     onChange={(e) => updateInterval(dIndex, iIndex, 'start', e.target.value)}
                                                                     className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-purple-500 outline-none"
-                                                                />
+                                                                >
+                                                                    {timeOptions.map(opt => (
+                                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                                    ))}
+                                                                </select>
                                                                 <span className="text-gray-400">-</span>
-                                                                <input
-                                                                    type="time"
+                                                                <select
                                                                     value={interval.end}
                                                                     onChange={(e) => updateInterval(dIndex, iIndex, 'end', e.target.value)}
                                                                     className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-purple-500 outline-none"
-                                                                />
+                                                                >
+                                                                    {timeOptions.map(opt => (
+                                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                                    ))}
+                                                                </select>
                                                                 <button
                                                                     onClick={() => removeInterval(dIndex, iIndex)}
                                                                     className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
@@ -1745,6 +2091,7 @@ const TeacherDashboard = () => {
                                         <select
                                             className="w-full px-4 py-2 rounded-xl border border-gray-200 outline-none focus:border-purple-600"
                                             value={recurringConfig.studentId}
+                                            required
                                             onChange={e => setRecurringConfig({ ...recurringConfig, studentId: e.target.value })}
                                         >
                                             <option value="">Select Student</option>
@@ -1756,6 +2103,7 @@ const TeacherDashboard = () => {
                                             <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Start Date</label>
                                             <input
                                                 type="date"
+                                                required
                                                 className="w-full px-4 py-2 rounded-xl border border-gray-200 outline-none focus:border-purple-600"
                                                 value={recurringConfig.startDate}
                                                 onChange={e => setRecurringConfig({ ...recurringConfig, startDate: e.target.value })}
@@ -1763,13 +2111,32 @@ const TeacherDashboard = () => {
                                         </div>
                                         <div>
                                             <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Time</label>
-                                            <input
-                                                type="time"
-                                                className="w-full px-4 py-2 rounded-xl border border-gray-200 outline-none focus:border-purple-600"
+                                            <select
+                                                required
+                                                className="w-full px-4 py-2 rounded-xl border border-gray-200 outline-none focus:border-purple-600 appearance-none"
                                                 value={recurringConfig.time}
                                                 onChange={e => setRecurringConfig({ ...recurringConfig, time: e.target.value })}
-                                            />
+                                            >
+                                                <option value="">Time</option>
+                                                {timeOptions.map(opt => (
+                                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                ))}
+                                            </select>
                                         </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Subject</label>
+                                        <select
+                                            className="w-full px-4 py-2 rounded-xl border border-gray-200 outline-none focus:border-purple-600"
+                                            value={recurringConfig.subject}
+                                            onChange={e => setRecurringConfig({ ...recurringConfig, subject: e.target.value })}
+                                        >
+                                            <option value="Maths KS3">Maths KS3</option>
+                                            <option value="Maths GCSE">Maths GCSE</option>
+                                            <option value="Sociology GCSE">Sociology GCSE</option>
+                                            <option value="Sociology A-Level">Sociology A-Level</option>
+                                            <option value="Other">Other</option>
+                                        </select>
                                     </div>
                                     <div>
                                         <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Duration</label>
@@ -1793,6 +2160,74 @@ const TeacherDashboard = () => {
                     )
                 }
 
+                {/* Individual Booking Modal */}
+                {
+                    showIndividualBookingModal && (
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setShowIndividualBookingModal(false)}>
+                            <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                                <h3 className="text-xl font-bold text-gray-900 mb-4">Book Individual Lesson</h3>
+                                <form onSubmit={handleIndividualBooking} className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Student</label>
+                                        <select
+                                            className="w-full px-4 py-2 rounded-xl border border-gray-200 outline-none focus:border-teal-600"
+                                            value={individualBookingConfig.studentId}
+                                            required
+                                            onChange={e => setIndividualBookingConfig({ ...individualBookingConfig, studentId: e.target.value })}
+                                        >
+                                            <option value="">Select Student</option>
+                                            {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Subject</label>
+                                        <select
+                                            className="w-full px-4 py-2 rounded-xl border border-gray-200 outline-none focus:border-teal-600"
+                                            value={individualBookingConfig.subject}
+                                            onChange={e => setIndividualBookingConfig({ ...individualBookingConfig, subject: e.target.value })}
+                                        >
+                                            <option value="Maths KS3">Maths KS3</option>
+                                            <option value="Maths GCSE">Maths GCSE</option>
+                                            <option value="Sociology GCSE">Sociology GCSE</option>
+                                            <option value="Sociology A-Level">Sociology A-Level</option>
+                                            <option value="Other">Other</option>
+                                        </select>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Date</label>
+                                            <input
+                                                type="date"
+                                                required
+                                                className="w-full px-4 py-2 rounded-xl border border-gray-200 outline-none focus:border-teal-600"
+                                                value={individualBookingConfig.date}
+                                                onChange={e => setIndividualBookingConfig({ ...individualBookingConfig, date: e.target.value })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Time</label>
+                                            <select
+                                                required
+                                                className="w-full px-4 py-2 rounded-xl border border-gray-200 outline-none focus:border-teal-600 appearance-none"
+                                                value={individualBookingConfig.time}
+                                                onChange={e => setIndividualBookingConfig({ ...individualBookingConfig, time: e.target.value })}
+                                            >
+                                                <option value="">Time</option>
+                                                {timeOptions.map(opt => (
+                                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <button type="submit" className="w-full py-3 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 transition-all mt-2">
+                                        Confirm Booking
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    )
+                }
+
                 {/* Teacher Reschedule Modal */}
                 {
                     rescheduleTarget && (
@@ -1804,7 +2239,7 @@ const TeacherDashboard = () => {
                                 <div className="space-y-4">
                                     <div className="bg-purple-50 p-3 rounded-lg text-sm">
                                         <span className="block text-xs uppercase font-bold text-purple-400">Current</span>
-                                        <span className="font-bold text-purple-900">{new Date(rescheduleTarget.date).toLocaleDateString()} at {formatTime(rescheduleTarget.time)}</span>
+                                        <span className="font-bold text-purple-900">{new Date(rescheduleTarget.date).toLocaleDateString('en-GB')} at {formatTime(rescheduleTarget.time)}</span>
                                     </div>
 
                                     <div className="grid grid-cols-2 gap-4">
@@ -1819,12 +2254,15 @@ const TeacherDashboard = () => {
                                         </div>
                                         <div>
                                             <label className="block text-xs font-bold text-gray-400 uppercase mb-1">New Time</label>
-                                            <input
-                                                type="time"
-                                                className="w-full px-4 py-2 rounded-xl border border-gray-200 outline-none focus:border-purple-600"
+                                            <select
+                                                className="w-full px-4 py-2 rounded-xl border border-gray-200 outline-none focus:border-purple-600 appearance-none"
                                                 value={rescheduleConfig.newTime}
                                                 onChange={e => setRescheduleConfig({ ...rescheduleConfig, newTime: e.target.value })}
-                                            />
+                                            >
+                                                {timeOptions.map(opt => (
+                                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                ))}
+                                            </select>
                                         </div>
                                     </div>
 
@@ -1844,10 +2282,28 @@ const TeacherDashboard = () => {
                                         </div>
                                     )}
 
-                                    <div className="flex gap-2">
-                                        <button onClick={() => setRescheduleTarget(null)} className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition-all">Cancel</button>
-                                        <button onClick={confirmTeacherReschedule} className="flex-1 py-3 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 transition-all">
-                                            Send Proposal
+                                    <div className="flex flex-col gap-2">
+                                        <div className="flex gap-2">
+                                            <button onClick={() => setRescheduleTarget(null)} className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition-all">Back</button>
+                                            <button onClick={confirmTeacherReschedule} className="flex-1 py-3 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 transition-all">
+                                                Send Proposal
+                                            </button>
+                                        </div>
+                                        <button
+                                            onClick={() => {
+                                                if (window.confirm(`Are you sure you want to cancel this lesson with ${rescheduleTarget.student}?`)) {
+                                                    const updatedB = bookings.map(b => b.id === rescheduleTarget.id ? { ...b, status: 'cancelled' } : b);
+                                                    setBookings(updatedB);
+                                                    localStorage.setItem('tutor_bookings', JSON.stringify(updatedB));
+                                                    window.dispatchEvent(new Event('storage'));
+                                                    emailService.sendCancellationNotice(rescheduleTarget, 'teacher');
+                                                    setRescheduleTarget(null);
+                                                    setSelectedDate(null);
+                                                }
+                                            }}
+                                            className="w-full py-2.5 text-red-600 font-bold hover:bg-red-50 rounded-xl transition-all border border-red-100 mt-2"
+                                        >
+                                            Cancel Lesson Entirely
                                         </button>
                                     </div>
                                 </div>
@@ -1869,7 +2325,7 @@ const TeacherDashboard = () => {
                                 </h3>
                                 <p className="text-gray-500 mb-6 text-sm">
                                     {rescheduleConfirm.action === 'approve'
-                                        ? `Confirm change to ${new Date(rescheduleConfirm.booking.requestedDate).toLocaleDateString()} at ${formatTime(rescheduleConfirm.booking.requestedTime)}?`
+                                        ? `Confirm change to ${new Date(rescheduleConfirm.booking.requestedDate).toLocaleDateString('en-GB')} at ${formatTime(rescheduleConfirm.booking.requestedTime)}?`
                                         : 'Are you sure you want to deny this request? The new slot will be freed.'}
                                 </p>
                                 <div className="flex gap-3">
@@ -1885,6 +2341,16 @@ const TeacherDashboard = () => {
                         </div>
                     )
                 }
+                {/* Notification UI */}
+                {notification && (
+                    <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] animate-in slide-in-from-bottom-10">
+                        <div className={`px-8 py-4 rounded-full shadow-2xl flex items-center gap-3 border-2 ${notification.type === 'error' ? 'bg-red-500 border-red-400 text-white' : 'bg-purple-600 border-purple-500 text-white'}`}>
+                            {notification.type === 'error' ? <AlertCircle size={20} /> : <CheckCircle size={20} />}
+                            <span className="font-bold text-sm tracking-tight">{notification.message}</span>
+                            <button onClick={() => setNotification(null)} className="ml-2 opacity-50 text-xl font-bold">×</button>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
