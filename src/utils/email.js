@@ -181,6 +181,37 @@ Please allow 5-10 business days for this to appear in your account.`;
         }
     },
 
+    /**
+     * Send a payment receipt
+     */
+    async sendReceipt(paymentData) {
+        try {
+            const subjectLine = `Receipt: Payment for ${paymentData.subject}`;
+            const messageBody = `Hi ${paymentData.studentName || paymentData.student},
+
+Thank you for your payment. Here is your receipt.
+
+--------------------------------------------------
+Receipt #: ${paymentData.id.toString().slice(-6)}
+Date: ${new Date().toLocaleDateString()}
+Item: ${paymentData.subject}
+Amount: £${paymentData.cost}
+Status: Paid
+--------------------------------------------------
+
+We appreciate your business!
+
+Best,
+Davina`;
+
+            // We need the student's email. If it's not in paymentData, we might need to look it up or rely on it being passed.
+            // In the dashboard call, we should ensure we pass it.
+            return await this._sendStudentEmail(paymentData.studentName || paymentData.student, paymentData.email, subjectLine, messageBody);
+        } catch (error) {
+            console.error('Failed to send receipt email:', error);
+        }
+    },
+
     async sendReminder(bookingData) {
         console.log('Reminder logic would trigger here');
     },

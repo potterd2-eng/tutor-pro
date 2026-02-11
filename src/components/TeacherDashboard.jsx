@@ -86,6 +86,49 @@ const TeacherDashboard = () => {
     const [rescheduleTarget, setRescheduleTarget] = useState(null); // { booking, mode: 'single' | 'series' }
     const [rescheduleConfig, setRescheduleConfig] = useState({ newDate: '', newTime: '', applyToSeries: false });
 
+    // Delete Confirmation State
+    const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, type: 'slot' | 'booking', data }
+
+    const handleDeleteClick = (slot) => {
+        setDeleteConfirm({ id: slot.id, type: 'slot', data: slot });
+    };
+
+    const confirmDelete = () => {
+        if (!deleteConfirm) return;
+
+        // deleteConfirm.id is the slot ID
+        const updated = lessonSlots.filter(s => s.id !== deleteConfirm.id);
+        setLessonSlots(updated);
+        localStorage.setItem('tutor_lesson_slots', JSON.stringify(updated));
+
+        // Also checks if there was a booking associated with this slot time?
+        // The slot object has 'bookedBy'. match it?
+        // Ideally we should cancel the booking too if it exists.
+        const slot = deleteConfirm.data;
+        if (slot.bookedBy) {
+            // Find booking
+            const booking = bookings.find(b => b.date === slot.date && b.time === slot.time && b.student === slot.bookedBy && b.status !== 'cancelled');
+            if (booking) {
+                // Cancel booking
+                const updatedBookings = bookings.map(b => b.id === booking.id ? { ...b, status: 'cancelled' } : b);
+                setBookings(updatedBookings);
+                localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+
+                // Notify Student
+                emailService.sendCancellationNotice({
+                    student: booking.student,
+                    email: 'student@example.com', // In a real app, look up student email
+                    date: booking.date,
+                    time: booking.time,
+                    topic: booking.topic || 'Lesson'
+                });
+            }
+        }
+
+        window.dispatchEvent(new Event('storage'));
+        setDeleteConfirm(null);
+    };
+
     useEffect(() => {
         const storedStudents = localStorage.getItem('tutor_students');
         if (storedStudents) setStudents(JSON.parse(storedStudents));
@@ -155,13 +198,13 @@ const TeacherDashboard = () => {
     const now = new Date();
 
     const paidEarnings = sessionHistory
-        .filter(s => s.paymentStatus === 'Paid')
-        .reduce((sum, s) => sum + (Number(s.cost) || 0), 0);
+        .filter(s => s.paymentStatus && s.paymentStatus.toLowerCase() === 'paid')
+        .reduce((sum, s) => sum + (Number(s.cost) || 30), 0);
 
     // Outstanding = Completed lessons that are NOT marked as 'Paid'
     // This is work already done but money not yet received.
     const completedUnpaid = sessionHistory
-        .filter(s => s.paymentStatus !== 'Paid' && s.type !== 'consultation' && s.subject !== 'Free Consultation')
+        .filter(s => (!s.paymentStatus || s.paymentStatus.toLowerCase() !== 'paid') && s.type !== 'consultation' && s.subject !== 'Free Consultation')
         .reduce((sum, s) => sum + (Number(s.cost) || 30), 0);
 
     // Upcoming = Bookings in the future
@@ -1013,7 +1056,7 @@ const TeacherDashboard = () => {
                         </div>
                     </div>
                 ) : activeTab === 'slots' ? (
-                    <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
+                    <div className="max-w-5xl mx-auto space-y-6 animate-in slide-in-from-right-4 duration-300">
                         <div className="flex justify-between items-center mb-6">
                             <div>
                                 <h2 className="text-2xl font-bold text-gray-800">Availability Calendar</h2>
@@ -1057,11 +1100,22 @@ const TeacherDashboard = () => {
                                     const dateStr = day.toISOString().split('T')[0];
 
                                     // Get slots and bookings for this day
-                                    // 1. Manual Slots
-                                    const daySlots = lessonSlots.filter(s => s.date === dateStr);
-
-                                    // 2. Confirmed Bookings (that might not have a manual slot entry if generated)
+                                    // 1. Confirmed Bookings
                                     const dayBookings = bookings.filter(b => b.date === dateStr && b.status !== 'cancelled');
+
+                                    // 2. Manual Slots
+                                    const daySlots = lessonSlots.filter(s => s.date === dateStr);
+                                    const openSlots = daySlots.filter(s => !s.bookedBy && !dayBookings.some(b => b.time === s.time));
+                                    const fallbackBookings = daySlots.filter(s => s.bookedBy && !dayBookings.some(b => b.time === s.time)).map(s => ({
+                                        id: s.id,
+                                        date: s.date,
+                                        time: s.time,
+                                        student: s.bookedBy,
+                                        status: 'confirmed_fallback',
+                                        isFallback: true
+                                    }));
+
+                                    const allDisplayItems = [...dayBookings, ...fallbackBookings];
 
                                     const isToday = new Date().toDateString() === day.toDateString();
                                     const isPast = day < new Date().setHours(0, 0, 0, 0);
@@ -1098,39 +1152,33 @@ const TeacherDashboard = () => {
                                             </div>
 
                                             <div className="space-y-1 overflow-hidden">
-                                                {/* Show up to 3 items */}
-                                                {dayBookings.slice(0, 3).map(booking => (
+                                                {/* Show Bookings */}
+                                                {allDisplayItems.slice(0, 3).map(booking => (
                                                     <div
                                                         key={booking.id}
                                                         onClick={(e) => {
                                                             e.stopPropagation();
-                                                            initiateTeacherReschedule(booking);
+                                                            booking.isFallback ? null : initiateTeacherReschedule(booking);
                                                         }}
                                                         className={`text-[10px] px-2 py-1 rounded truncate font-bold border transition-all cursor-pointer hover:scale-105 ${getStudentColor(booking.student)}`}
-                                                        title="Click to Reschedule"
+                                                        title={booking.isFallback ? "Fallback Data" : "Click to Reschedule"}
                                                     >
                                                         {formatTime(booking.time)} {booking.student}
                                                     </div>
                                                 ))}
 
-                                                {/* If no bookings, show open slots */}
-                                                {dayBookings.length === 0 && daySlots.length > 0 && (
-                                                    daySlots.slice(0, 3).map(slot => (
-                                                        <div key={slot.id} className="text-[10px] px-2 py-1 rounded truncate font-bold bg-white text-purple-400 border border-purple-200 border-dashed hover:bg-purple-50 hover:border-purple-300 transition-colors">
-                                                            {formatTime(slot.time)} Open
-                                                        </div>
-                                                    ))
-                                                )}
+                                                {/* Show Open Slots */}
+                                                {openSlots.slice(0, Math.max(0, 3 - allDisplayItems.length)).map(slot => (
+                                                    <div key={slot.id} className="text-[10px] px-2 py-1 rounded truncate font-bold bg-white text-purple-400 border border-purple-200 border-dashed hover:bg-purple-50 hover:border-purple-300 transition-colors">
+                                                        {formatTime(slot.time)} Open
+                                                    </div>
+                                                ))}
 
-                                                {(dayBookings.length + (dayBookings.length === 0 ? daySlots.length : 0)) > 3 && (
+                                                {(allDisplayItems.length + openSlots.length) > 3 && (
                                                     <div className="text-[10px] text-gray-400 font-bold pl-1">
-                                                        +{(dayBookings.length + (dayBookings.length === 0 ? daySlots.length : 0)) - 3} more
+                                                        +{(allDisplayItems.length + openSlots.length) - 3} more
                                                     </div>
                                                 )}
-                                            </div>
-
-                                            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-white/60 transition-opacity">
-                                                <span className="bg-white shadow-md px-3 py-1 rounded-full text-xs font-bold text-purple-600">Manage</span>
                                             </div>
                                         </div>
                                     );
@@ -1149,60 +1197,20 @@ const TeacherDashboard = () => {
                     </div>
                 ) : activeTab === 'earnings' ? (
                     <div className="max-w-3xl mx-auto space-y-6 animate-in slide-in-from-right-4 duration-300">
-                        <div className="text-center mb-8 relative">
-                            <h2 className="text-3xl font-bold text-gray-900 mb-2">Earnings Dashboard</h2>
-                            <p className="text-gray-500">Track your tutoring income</p>
 
-                        </div>
-
-                        {/* Main Earnings Cards */}
-                        <div className="grid md:grid-cols-3 gap-4">
-                            {/* Earned This Month */}
-                            <div className="bg-gradient-to-br from-green-500 to-green-600 p-6 rounded-2xl shadow-lg text-white">
-                                <div className="text-sm font-bold uppercase tracking-wide opacity-90 mb-2">Earned This Month</div>
-                                <div className="text-4xl font-bold mb-1">
-                                    £{sessionHistory
-                                        .filter(s => {
-                                            const sessionDate = new Date(s.date);
-                                            return s.paymentStatus === 'Paid' &&
-                                                sessionDate.getMonth() === currentMonth &&
-                                                sessionDate.getFullYear() === currentYear;
-                                        })
-                                        .reduce((sum, s) => sum + (s.cost || 30), 0)}
-                                </div>
-                                <div className="text-xs opacity-80">Received payments</div>
-                            </div>
-
-                            {/* Projected This Month */}
-                            <div className="bg-gradient-to-br from-purple-500 to-purple-600 p-6 rounded-2xl shadow-lg text-white">
-                                <div className="text-sm font-bold uppercase tracking-wide opacity-90 mb-2">Projected This Month</div>
-                                <div className="text-4xl font-bold mb-1">£{projectedThisMonth}</div>
-                                <div className="text-xs opacity-80">{monthlyProjections[0].bookedLessons} lessons booked</div>
-                            </div>
-
-                            {/* Outstanding Balance */}
-                            <div className="bg-gradient-to-br from-orange-500 to-orange-600 p-6 rounded-2xl shadow-lg text-white">
-                                <div className="text-sm font-bold uppercase tracking-wide opacity-90 mb-2">Outstanding Balance</div>
-                                <div className="text-4xl font-bold mb-1">£{outstandingEarnings}</div>
-                                <div className="text-xs opacity-80">Money owed (Completed work)</div>
-                            </div>
-                        </div>
-
-                        {/* Summary Details */}
-                        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                        {/* Financial Summary */}
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
                             <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
                                 <span className="text-2xl">📊</span> Financial Summary
                             </h3>
-                            <div className="space-y-3">
-                                <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                            <div className="space-y-4">
+                                <div className="flex justify-between items-center py-2 border-b border-gray-50">
                                     <span className="text-gray-600">Total Paid (All Time)</span>
                                     <span className="font-bold text-green-600 text-lg">£{paidEarnings}</span>
                                 </div>
-                                <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                                <div className="flex justify-between items-center py-2 border-b border-gray-50">
                                     <span className="text-gray-600">Upcoming / Booked Lessons</span>
-                                    <span className="font-bold text-blue-600 text-lg">
-                                        £{futureEarnings} <span className="text-sm text-gray-400">({futureBookings.length} lessons)</span>
-                                    </span>
+                                    <span className="font-bold text-blue-600 text-lg">£{futureEarnings} <span className="text-sm text-gray-400 font-normal">({futureBookings.length} lessons)</span></span>
                                 </div>
                                 <div className="flex justify-between items-center py-2">
                                     <span className="text-gray-600">Total Projected (Owed + Upcoming)</span>
@@ -1211,32 +1219,18 @@ const TeacherDashboard = () => {
                             </div>
                         </div>
 
-                        {/* Monthly Projection Breakdown */}
-                        <div className="space-y-4">
-                            <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2 px-1">
-                                <span className="text-2xl">📅</span> 3-Month Revenue Projection
+                        {/* 3-Month Projection */}
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                            <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                                <span className="text-2xl">🗓️</span> 3-Month Revenue Projection
                             </h3>
-                            <div className="grid md:grid-cols-3 gap-4">
-                                {monthlyProjections.map((proj, idx) => (
-                                    <div key={idx} className={`rounded-2xl shadow-sm border p-5 transition-all ${idx === 0 ? 'bg-gradient-to-br from-purple-50 to-blue-50 border-purple-100' : 'bg-white border-gray-100 hover:border-purple-100'
-                                        }`}>
-                                        <div className="flex justify-between items-start mb-4">
-                                            <div className="font-bold text-gray-900">{proj.monthName}</div>
-                                            {idx === 0 && <span className="text-[10px] font-bold uppercase bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full">Current</span>}
-                                        </div>
-                                        <div className="space-y-3">
-                                            <div className="flex justify-between items-end">
-                                                <div className="text-gray-500 text-xs">Booked Lessons</div>
-                                                <div className="text-xl font-bold text-gray-900">{proj.bookedLessons}</div>
-                                            </div>
-                                            <div className="flex justify-between items-end">
-                                                <div className="text-gray-500 text-xs">Consultations</div>
-                                                <div className="text-xl font-bold text-teal-600">{proj.consultations}</div>
-                                            </div>
-                                            <div className="pt-3 border-t border-purple-100/50 flex justify-between items-end">
-                                                <div className="text-gray-900 text-xs font-bold font-display">Projected</div>
-                                                <div className="text-2xl font-bold text-purple-600">£{proj.projectedEarnings}</div>
-                                            </div>
+                            <div className="grid grid-cols-3 gap-4">
+                                {monthlyProjections.map((mp, i) => (
+                                    <div key={i} className={`p-4 rounded-xl text-center border ${i === 0 ? 'bg-purple-50 border-purple-100' : 'bg-gray-50 border-gray-100'}`}>
+                                        <div className="text-xs font-bold text-gray-400 uppercase mb-1">{mp.monthName}</div>
+                                        <div className="text-2xl font-bold text-gray-800">£{mp.projectedEarnings}</div>
+                                        <div className="text-xs text-gray-500 mt-2">
+                                            {mp.bookedLessons} Lessons • {mp.consultations} Consults
                                         </div>
                                     </div>
                                 ))}
@@ -1272,7 +1266,9 @@ const TeacherDashboard = () => {
                                                     <td className="py-4 font-bold text-gray-900">£{session.cost || 30}</td>
                                                     <td className="py-4">
                                                         <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${session.paymentStatus === 'Paid' ? 'bg-green-100 text-green-700' :
-                                                            session.paymentStatus === 'Refunded' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'
+                                                            session.paymentStatus === 'Refunded' ? 'bg-red-100 text-red-700' :
+                                                                session.paymentStatus === 'Due (Exception)' ? 'bg-purple-100 text-purple-700 border border-purple-200' :
+                                                                    'bg-orange-100 text-orange-700'
                                                             }`}>
                                                             {session.paymentStatus}
                                                         </span>

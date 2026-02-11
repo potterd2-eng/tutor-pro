@@ -9,6 +9,7 @@ import {
 import CryptoJS from 'crypto-js';
 import profilePic from '../assets/profile.jpg'; // Import profile picture
 import { emailService } from '../utils/email';
+import { generateGoogleCalendarUrl } from '../utils/calendar';
 
 const LandingPage = () => {
     const navigate = useNavigate();
@@ -491,10 +492,11 @@ const LandingPage = () => {
                 </div>
                 <div className="border-t border-gray-800 pt-8 text-center text-xs flex flex-col md:flex-row justify-between items-center gap-4">
                     <span>© 2026 Davina's Tutoring Platform. All rights reserved.</span>
-                    <span className="opacity-50">
-                        GDPR Compliance: Data collected is used solely for booking purposes.
-                        Contact us to request data deletion.
-                    </span>
+                    <div className="flex gap-4">
+                        <a href="/privacy" className="hover:text-purple-400 underline">Privacy Policy</a>
+                        <a href="/terms" className="hover:text-purple-400 underline">Terms of Service</a>
+                        <a href="/cookie-policy" className="hover:text-purple-400 underline">Cookie Policy</a>
+                    </div>
                 </div>
             </footer>
 
@@ -823,6 +825,9 @@ const BookingGrid = () => {
     const [bookingEmail, setBookingEmail] = useState('');
     const [bookingSubject, setBookingSubject] = useState('');
     const [bookingFor, setBookingFor] = useState('pupil'); // 'pupil' or 'parent'
+    const [studentAge, setStudentAge] = useState(''); // 'under16' or '16plus'
+    const [isParent, setIsParent] = useState(null); // true/false for under-16 bookings
+    const [parentEmail, setParentEmail] = useState(''); // for non-parent bookings of under-16
     const [gdprConsent, setGdprConsent] = useState(false);
 
     const [confirmationData, setConfirmationData] = useState(null);
@@ -1096,13 +1101,24 @@ const BookingGrid = () => {
                             </div>
                             <div>
                                 <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Topic / Subject</label>
-                                <input required type="text" value={bookingSubject} onChange={e => setBookingSubject(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:border-purple-500 outline-none" placeholder="KS3 Maths Help" />
+                                <select
+                                    required
+                                    value={bookingSubject}
+                                    onChange={e => setBookingSubject(e.target.value)}
+                                    className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:border-purple-500 outline-none appearance-none cursor-pointer"
+                                >
+                                    <option value="" disabled>Select a Subject</option>
+                                    <option value="Maths KS3">Maths KS3</option>
+                                    <option value="Maths GCSE">Maths GCSE</option>
+                                    <option value="Sociology GCSE">Sociology GCSE</option>
+                                    <option value="Sociology A Level">Sociology A Level</option>
+                                </select>
                             </div>
 
                             <div>
                                 <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Booking For</label>
                                 <div className="flex gap-3">
-                                    <label className="flex-1 flex items-center gap-2 p-3 border-2 rounded-xl cursor-pointer transition-all hover:border-purple-300 ${bookingFor === 'pupil' ? 'border-purple-600 bg-purple-50' : 'border-gray-200 bg-gray-50'}">
+                                    <label className={`flex-1 flex items-center gap-2 p-3 border-2 rounded-xl cursor-pointer transition-all hover:border-purple-300 ${bookingFor === 'pupil' ? 'border-purple-600 bg-purple-50' : 'border-gray-200 bg-gray-50'}`}>
                                         <input
                                             type="radio"
                                             name="bookingFor"
@@ -1127,10 +1143,103 @@ const BookingGrid = () => {
                                 </div>
                             </div>
 
+                            {/* Age Verification */}
+                            <div>
+                                <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Student Age</label>
+                                <div className="flex gap-3">
+                                    <label className={`flex-1 flex items-center gap-2 p-3 border-2 rounded-xl cursor-pointer transition-all hover:border-purple-300 ${studentAge === '16plus' ? 'border-purple-600 bg-purple-50' : 'border-gray-200 bg-gray-50'}`}>
+                                        <input
+                                            type="radio"
+                                            name="studentAge"
+                                            value="16plus"
+                                            checked={studentAge === '16plus'}
+                                            onChange={e => { setStudentAge(e.target.value); setIsParent(null); setParentEmail(''); }}
+                                            required
+                                            className="w-4 h-4 text-purple-600"
+                                        />
+                                        <span className="text-sm font-bold text-gray-700">16+ years</span>
+                                    </label>
+                                    <label className={`flex-1 flex items-center gap-2 p-3 border-2 rounded-xl cursor-pointer transition-all hover:border-purple-300 ${studentAge === 'under16' ? 'border-purple-600 bg-purple-50' : 'border-gray-200 bg-gray-50'}`}>
+                                        <input
+                                            type="radio"
+                                            name="studentAge"
+                                            value="under16"
+                                            checked={studentAge === 'under16'}
+                                            onChange={e => setStudentAge(e.target.value)}
+                                            required
+                                            className="w-4 h-4 text-purple-600"
+                                        />
+                                        <span className="text-sm font-bold text-gray-700">Under 16</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            {/* Parental Consent - shown only for under-16 */}
+                            {studentAge === 'under16' && (
+                                <div className="bg-yellow-50 border-2 border-yellow-200 rounded-xl p-4 space-y-3">
+                                    <p className="text-xs font-bold text-yellow-900 uppercase">Parental Consent Required (UK GDPR)</p>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-700 mb-2">Are you the parent/guardian?</label>
+                                        <div className="flex gap-3">
+                                            <label className={`flex-1 flex items-center justify-center gap-2 p-3 border-2 rounded-xl cursor-pointer transition-all ${isParent === true ? 'border-yellow-600 bg-yellow-100' : 'border-yellow-300 bg-white hover:border-yellow-400'}`}>
+                                                <input
+                                                    type="radio"
+                                                    name="isParent"
+                                                    value="yes"
+                                                    checked={isParent === true}
+                                                    onChange={() => { setIsParent(true); setParentEmail(''); }}
+                                                    required
+                                                    className="w-4 h-4 text-yellow-600"
+                                                />
+                                                <span className="text-sm font-bold text-gray-700">Yes</span>
+                                            </label>
+                                            <label className={`flex-1 flex items-center justify-center gap-2 p-3 border-2 rounded-xl cursor-pointer transition-all ${isParent === false ? 'border-yellow-600 bg-yellow-100' : 'border-yellow-300 bg-white hover:border-yellow-400'}`}>
+                                                <input
+                                                    type="radio"
+                                                    name="isParent"
+                                                    value="no"
+                                                    checked={isParent === false}
+                                                    onChange={() => setIsParent(false)}
+                                                    required
+                                                    className="w-4 h-4 text-yellow-600"
+                                                />
+                                                <span className="text-sm font-bold text-gray-700">No</span>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    {isParent === false && (
+                                        <div className="animate-in slide-in-from-top-2 duration-300">
+                                            <label className="block text-xs font-bold text-gray-700 mb-2">Parent/Guardian Email *</label>
+                                            <input
+                                                type="email"
+                                                required
+                                                value={parentEmail}
+                                                onChange={e => setParentEmail(e.target.value)}
+                                                placeholder="parent@example.com"
+                                                className="w-full px-4 py-3 rounded-xl border-2 border-yellow-300 focus:border-yellow-500 outline-none"
+                                            />
+                                            <p className="text-xs text-yellow-800 mt-2">
+                                                We'll send a consent confirmation email to the parent/guardian before finalizing this booking.
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {isParent === true && (
+                                        <label className="flex items-start gap-3 p-3 bg-white rounded-lg cursor-pointer hover:bg-yellow-50 transition-colors border-2 border-yellow-300">
+                                            <input type="checkbox" required className="mt-1 w-4 h-4 text-yellow-600 rounded border-gray-300 focus:ring-yellow-500" />
+                                            <span className="text-xs text-gray-700 leading-tight">
+                                                I confirm that I am the parent/legal guardian of this student and consent to the processing of their personal data as described in the <a href="/privacy" target="_blank" className="text-purple-600 underline">Privacy Policy</a>.
+                                            </span>
+                                        </label>
+                                    )}
+                                </div>
+                            )}
+
                             <label className="flex items-start gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors">
                                 <input type="checkbox" required checked={gdprConsent} onChange={e => setGdprConsent(e.target.checked)} className="mt-1 w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500" />
                                 <span className="text-xs text-gray-600 leading-tight">
-                                    I agree to my data being processed for this booking. Data is stored locally for this demo and shared with the tutor via email.
+                                    I agree to the <a href="/terms" target="_blank" className="text-purple-600 underline">Terms of Service</a> and <a href="/privacy" target="_blank" className="text-purple-600 underline">Privacy Policy</a>.
                                 </span>
                             </label>
 
@@ -1147,52 +1256,33 @@ const BookingGrid = () => {
 
             {/* Success / Confirmation Modal */}
             {confirmationData && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setConfirmationData(null)}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setConfirmationData(null)}>
                     <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full animate-in zoom-in-95 text-center" onClick={e => e.stopPropagation()}>
-                        <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
-                            <CheckCircle size={32} />
+                        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <Check className="text-green-600" size={32} />
                         </div>
-                        <h2 className="text-2xl font-bold text-gray-800 mb-2">Booking Confirmed!</h2>
-                        <p className="text-gray-500 mb-6">
-                            Thanks {confirmationData.student}! Your consultation is set for <strong>{new Date(confirmationData.date).toLocaleDateString()} at {confirmationData.time}</strong>.
+                        <h3 className="text-2xl font-bold text-gray-800 mb-2">Booking Confirmed!</h3>
+                        <p className="text-gray-600 mb-6">
+                            You're all set for <strong>{new Date(confirmationData.date).toLocaleDateString()}</strong> at <strong>{confirmationData.time}</strong>.
+                            A confirmation email has been sent to {confirmationData.email}.
                         </p>
 
-                        <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6 text-left">
-                            <label className="text-xs font-bold text-gray-400 uppercase block mb-2">Meeting Link</label>
-                            <div className="flex items-center gap-2">
-                                <code className="flex-1 bg-white border border-gray-200 p-2 rounded text-sm text-purple-600 truncate">
-                                    {confirmationData.link}
-                                </code>
-                                <button
-                                    onClick={() => {
-                                        navigator.clipboard.writeText(confirmationData.link);
-                                        setCopySuccess(true);
-                                        setTimeout(() => setCopySuccess(false), 2000);
-                                    }}
-                                    className="p-2 hover:bg-gray-200 rounded text-gray-500 flex items-center gap-1"
-                                    title="Copy Link"
-                                >
-                                    {copySuccess ? <span className="text-green-600 text-xs font-bold animate-in fade-in">Copied!</span> : <Copy size={18} />}
-                                </button>
-                            </div>
-                            <p className="text-xs text-gray-400 mt-2 flex items-center gap-1">
-                                <Mail size={12} /> Email sent to {confirmationData.email}
-                            </p>
-                        </div>
+                        <a
+                            href={generateGoogleCalendarUrl(confirmationData)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block w-full py-3 mb-3 bg-white border-2 border-gray-200 text-gray-600 font-bold rounded-xl hover:border-blue-200 hover:text-blue-600 transition-all flex items-center justify-center gap-2"
+                        >
+                            <Calendar size={18} /> Add to Google Calendar
+                        </a>
 
-                        <div className="space-y-3">
-                            {/* Link removed as per user request to not show join button early */}
-                            <button
-                                onClick={() => setConfirmationData(null)}
-                                className="block w-full bg-gray-100 hover:bg-gray-200 text-gray-600 px-6 py-3 rounded-xl font-bold transition-all"
-                            >
-                                Close
-                            </button>
-                        </div>
+                        <button onClick={() => setConfirmationData(null)} className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold shadow-lg hover:bg-purple-700 transition-all">
+                            Close
+                        </button>
                     </div>
                 </div>
             )}
-        </div>
+        </div >
     );
 };
 

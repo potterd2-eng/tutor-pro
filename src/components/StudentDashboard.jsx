@@ -6,6 +6,7 @@ import {
     FileText, ChevronRight, LogOut, Plus, ArrowRight, X, Trash2
 } from 'lucide-react';
 import { emailService } from '../utils/email';
+import { generateGoogleCalendarUrl } from '../utils/calendar';
 
 const StudentDashboard = () => {
     const navigate = useNavigate();
@@ -252,8 +253,29 @@ const StudentDashboard = () => {
         setTimeout(() => {
             setIsProcessingPayment(false);
             markAsPaid(paymentTarget.id);
-            setPaymentTarget(null);
             setNotification({ type: 'success', message: "Payment Successful! Receipt sent to email." });
+
+            // Send Receipt Email
+            // We need student email. We can try to get it from 'paymentTarget' if available, or 'student' profile. 
+            // The paymentTarget comes from 'invoice', which might be from 'bookings' or 'history'.
+            // They usually have 'email' if they are bookings.
+            // If not, we might need to look up the student profile.
+            // For now, let's assume it's on the object or we use a fallback log.
+            // Actually, we can get current student profile from localStorage if needed.
+            const allStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
+            const studentProfile = allStudents.find(s => s.name === displayName);
+
+            const emailToSendTo = paymentTarget.email || (studentProfile ? studentProfile.email : '');
+
+            if (emailToSendTo) {
+                emailService.sendReceipt({
+                    ...paymentTarget,
+                    studentName: displayName,
+                    email: emailToSendTo
+                });
+            }
+
+            setPaymentTarget(null);
             setConfirmation(null); // Just in case
         }, 2000);
     };
@@ -976,7 +998,16 @@ const StudentDashboard = () => {
                                                     )}
                                                 </div>
 
-                                                <div className="flex gap-3 min-w-[200px] justify-end">
+                                                <div className="flex gap-3 min-w-[200px] justify-end flex-wrap">
+                                                    <a
+                                                        href={generateGoogleCalendarUrl(booking)}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="p-2.5 bg-white border border-gray-200 hover:border-blue-200 hover:text-blue-600 text-gray-400 rounded-xl font-bold transition-all text-sm flex items-center justify-center"
+                                                        title="Add to Google Calendar"
+                                                    >
+                                                        <Calendar size={16} />
+                                                    </a>
                                                     <button
                                                         onClick={() => handleJoinLesson(booking.studentId || studentId || booking.id)}
                                                         className="px-5 py-2.5 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold shadow-md hover:shadow-lg transition-all flex items-center gap-2 text-sm"
@@ -1221,285 +1252,406 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
                                         <CreditCard className="text-blue-500" /> Invoices & Payments
                                     </h2>
                                     <div className="bg-white rounded-3xl shadow-sm border border-gray-200 overflow-hidden">
-                                        <table className="w-full text-left">
-                                            <thead className="bg-gray-50 border-b border-gray-100">
-                                                <tr>
-                                                    <th className="p-4 font-bold text-gray-400 text-xs uppercase">Date</th>
-                                                    <th className="p-4 font-bold text-gray-400 text-xs uppercase">Description</th>
-                                                    <th className="p-4 font-bold text-gray-400 text-xs uppercase">Amount</th>
-                                                    <th className="p-4 font-bold text-gray-400 text-xs uppercase">Status</th>
-                                                    <th className="p-4 font-bold text-gray-400 text-xs uppercase">Lesson</th>
-                                                    <th className="p-4 font-bold text-gray-400 text-xs uppercase text-right">Action</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-100">
-                                                {(() => {
-                                                    const allMetrics = [...bookings, ...history].sort((a, b) => new Date(b.date + 'T' + (b.time || '00:00')) - new Date(a.date + 'T' + (a.time || '00:00')));
-                                                    const processedSeries = new Set();
-                                                    const rows = [];
+                                        {/* Desktop Table View */}
+                                        <div className="hidden md:block overflow-x-auto">
+                                            <table className="w-full text-left">
+                                                <thead className="bg-gray-50 border-b border-gray-100">
+                                                    <tr>
+                                                        <th className="p-4 font-bold text-gray-400 text-xs uppercase">Date</th>
+                                                        <th className="p-4 font-bold text-gray-400 text-xs uppercase">Description</th>
+                                                        <th className="p-4 font-bold text-gray-400 text-xs uppercase">Amount</th>
+                                                        <th className="p-4 font-bold text-gray-400 text-xs uppercase">Status</th>
+                                                        <th className="p-4 font-bold text-gray-400 text-xs uppercase">Lesson</th>
+                                                        <th className="p-4 font-bold text-gray-400 text-xs uppercase text-right">Action</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-100">
+                                                    {(() => {
+                                                        const allMetrics = [...bookings, ...history].sort((a, b) => new Date(b.date + 'T' + (b.time || '00:00')) - new Date(a.date + 'T' + (a.time || '00:00')));
+                                                        const processedSeries = new Set();
+                                                        const rows = [];
 
-                                                    allMetrics.forEach(item => {
-                                                        const isSeries = item.recurringId || (item.id && typeof item.id === 'string' && item.id.includes('wk'));
+                                                        allMetrics.forEach(item => {
+                                                            const isSeries = item.recurringId || (item.id && typeof item.id === 'string' && item.id.includes('wk'));
 
-                                                        let seriesId = null;
-                                                        if (isSeries) {
-                                                            if (item.recurringId) seriesId = item.recurringId;
-                                                            else if (typeof item.id === 'string' && item.id.includes(' - wk')) seriesId = item.id.split(' - wk')[0];
-                                                            else if (typeof item.id === 'string' && item.id.includes('- wk')) seriesId = item.id.split('- wk')[0];
-                                                        }
+                                                            let seriesId = null;
+                                                            if (isSeries) {
+                                                                if (item.recurringId) seriesId = item.recurringId;
+                                                                else if (typeof item.id === 'string' && item.id.includes(' - wk')) seriesId = item.id.split(' - wk')[0];
+                                                                else if (typeof item.id === 'string' && item.id.includes('- wk')) seriesId = item.id.split('- wk')[0];
+                                                            }
 
-                                                        if (seriesId) {
-                                                            if (processedSeries.has(seriesId)) return;
+                                                            if (seriesId) {
+                                                                if (processedSeries.has(seriesId)) return;
 
-                                                            const seriesItems = allMetrics.filter(i =>
-                                                                i.recurringId === seriesId ||
-                                                                (i.id && typeof i.id === 'string' && (i.id.startsWith(seriesId + ' - wk') || i.id.startsWith(seriesId + '- wk')))
-                                                            );
+                                                                const seriesItems = allMetrics.filter(i =>
+                                                                    i.recurringId === seriesId ||
+                                                                    (i.id && typeof i.id === 'string' && (i.id.startsWith(seriesId + ' - wk') || i.id.startsWith(seriesId + '- wk')))
+                                                                );
 
-                                                            if (seriesItems.length > 1) {
-                                                                processedSeries.add(seriesId);
-                                                                seriesItems.sort((a, b) => new Date(a.date) - new Date(b.date));
+                                                                if (seriesItems.length > 1) {
+                                                                    processedSeries.add(seriesId);
+                                                                    seriesItems.sort((a, b) => new Date(a.date) - new Date(b.date));
 
-                                                                const isPaid = seriesItems.every(i => i.paymentStatus === 'Paid');
+                                                                    const isPaid = seriesItems.every(i => i.paymentStatus === 'Paid');
 
-                                                                rows.push({
-                                                                    id: seriesId,
-                                                                    date: seriesItems[0].date,
-                                                                    time: seriesItems[0].time,
-                                                                    subject: "10-Week Tuition Block",
-                                                                    cost: 280,
-                                                                    paymentStatus: isPaid ? 'Paid' : 'Due',
-                                                                    isGroup: true,
-                                                                    seriesIds: seriesItems.map(i => i.id).filter(id => id), // Ensure valid IDs
-                                                                    itemCount: seriesItems.length
-                                                                });
+                                                                    rows.push({
+                                                                        id: seriesId,
+                                                                        date: seriesItems[0].date,
+                                                                        time: seriesItems[0].time,
+                                                                        subject: "10-Week Tuition Block",
+                                                                        cost: 280,
+                                                                        paymentStatus: isPaid ? 'Paid' : 'Due',
+                                                                        isGroup: true,
+                                                                        seriesIds: seriesItems.map(i => i.id).filter(id => id), // Ensure valid IDs
+                                                                        itemCount: seriesItems.length
+                                                                    });
+                                                                } else {
+                                                                    rows.push(item);
+                                                                }
                                                             } else {
                                                                 rows.push(item);
                                                             }
+                                                        });
+
+                                                        const unpaidRows = rows.filter(r => r.paymentStatus !== 'Paid').sort((a, b) => new Date(a.date) - new Date(b.date));
+                                                        const nextDueId = unpaidRows.length > 0 ? unpaidRows[0].id : null;
+
+                                                        // Sort rows to put "Due" (nextDueId) at the top
+                                                        rows.sort((a, b) => {
+                                                            if (a.id === nextDueId) return -1;
+                                                            if (b.id === nextDueId) return 1;
+                                                            return 0;
+                                                        });
+
+                                                        return rows.map((invoice) => {
+                                                            let statusLabel = invoice.paymentStatus || 'Due';
+                                                            let statusColor = '';
+
+                                                            if (invoice.paymentStatus === 'Paid') {
+                                                                statusLabel = 'Completed';
+                                                                statusColor = 'bg-green-100 text-green-700 border border-green-200';
+                                                            } else {
+                                                                if (invoice.id === nextDueId) {
+                                                                    statusLabel = 'Due';
+                                                                    statusColor = 'bg-red-100 text-red-700 border border-red-200 font-bold animate-pulse';
+                                                                } else {
+                                                                    statusLabel = 'Unpaid';
+                                                                    statusColor = 'bg-gray-100 text-gray-500 border border-gray-200';
+                                                                }
+                                                            }
+
+                                                            return (
+                                                                <React.Fragment key={invoice.id || Math.random()}>
+                                                                    <tr className="hover:bg-gray-50 transition-colors">
+                                                                        <td className="p-4">
+                                                                            <div className="font-bold text-gray-700">{new Date(invoice.date).toLocaleDateString()}</div>
+                                                                            {invoice.isGroup && <div className="text-xs text-purple-600 font-medium">Starts {invoice.time}</div>}
+                                                                            {!invoice.isGroup && <div className="text-xs text-gray-400">{invoice.time}</div>}
+                                                                        </td>
+                                                                        <td className="p-4 text-gray-600 text-sm">
+                                                                            {invoice.subject || invoice.topic || 'Tutoring Session'}
+                                                                            {invoice.isGroup && (
+                                                                                <div className="mt-1">
+                                                                                    <span className="text-xs bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full font-bold">10 Sessions</span>
+                                                                                    <button
+                                                                                        onClick={() => setExpandedBlockId(expandedBlockId === invoice.id ? null : invoice.id)}
+                                                                                        className="ml-2 text-xs text-purple-700 underline hover:text-purple-900"
+                                                                                    >
+                                                                                        {expandedBlockId === invoice.id ? 'Hide Dates' : 'Show Dates'}
+                                                                                    </button>
+                                                                                </div>
+                                                                            )}
+                                                                        </td>
+                                                                        <td className="p-4 font-bold text-gray-900">£{invoice.cost || 30}</td>
+                                                                        <td className="p-4">
+                                                                            <span className={`px-2 py-1 rounded-full text-xs font-bold ${statusColor}`}>
+                                                                                {statusLabel}
+                                                                            </span>
+                                                                        </td>
+                                                                        <td className="p-4">
+                                                                            {invoice.isGroup ? (
+                                                                                <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-lg font-bold uppercase tracking-wider border border-gray-200">
+                                                                                    Series
+                                                                                </span>
+                                                                            ) : (invoice.feedback_well || invoice.lessonTopic ? (
+                                                                                <span className="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-lg font-black uppercase tracking-wider border border-blue-200 shadow-sm">
+                                                                                    Completed
+                                                                                </span>
+                                                                            ) : (
+                                                                                <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-lg font-bold uppercase tracking-wider border border-gray-200">
+                                                                                    Scheduled
+                                                                                </span>
+                                                                            ))}
+                                                                        </td>
+                                                                        <td className="p-4 text-right">
+                                                                            {invoice.paymentStatus !== 'Paid' ? (
+                                                                                <div className="flex gap-2 justify-end">
+                                                                                    <button
+                                                                                        onClick={() => handlePay(invoice)}
+                                                                                        className="bg-blue-600 text-white px-6 py-2 rounded-lg text-xs font-bold hover:bg-blue-700 shadow-md transition-all"
+                                                                                    >
+                                                                                        Pay via Stripe
+                                                                                    </button>
+                                                                                </div>
+                                                                            ) : (
+                                                                                <button
+                                                                                    onClick={() => handleReceipt(invoice)}
+                                                                                    className="text-teal-600 hover:text-teal-700 flex items-center gap-1 justify-end w-full text-xs font-bold transition-colors"
+                                                                                >
+                                                                                    <FileText size={14} /> Receipt
+                                                                                </button>
+                                                                            )}
+                                                                        </td>
+                                                                    </tr>
+                                                                    {invoice.isGroup && expandedBlockId === invoice.id && (
+                                                                        <tr>
+                                                                            <td colSpan="6" className="bg-purple-50 p-4 rounded-xl">
+                                                                                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                                                                                    {(() => {
+                                                                                        const allItems = [...bookings, ...history];
+                                                                                        const series = allItems.filter(i => i.recurringId === invoice.id || (i.id && typeof i.id === 'string' && i.id.startsWith(invoice.id)));
+                                                                                        series.sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+
+                                                                                        return series.map((s, i) => (
+                                                                                            <div key={i} className="bg-white p-2 rounded border border-purple-100 text-center">
+                                                                                                <div className="text-xs font-bold text-gray-500">Lesson {i + 1}</div>
+                                                                                                <div className="font-bold text-purple-700">{new Date(s.date).toLocaleDateString()}</div>
+                                                                                                <div className="text-xs text-gray-400">{s.time}</div>
+                                                                                            </div>
+                                                                                        ));
+                                                                                    })()}
+                                                                                </div>
+                                                                            </td>
+                                                                        </tr>
+                                                                    )}
+                                                                </React.Fragment>
+                                                            );
+                                                        });
+                                                    })()}
+                                                </tbody>
+                                            </table>
+                                        </div>
+
+                                        {/* Mobile Card View */}
+                                        <div className="md:hidden space-y-4 p-4">
+                                            {(() => {
+                                                const allMetrics = [...bookings, ...history].sort((a, b) => new Date(b.date + 'T' + (b.time || '00:00')) - new Date(a.date + 'T' + (a.time || '00:00')));
+                                                const processedSeries = new Set();
+                                                const rows = [];
+
+                                                allMetrics.forEach(item => {
+                                                    const isSeries = item.recurringId || (item.id && typeof item.id === 'string' && item.id.includes('wk'));
+
+                                                    let seriesId = null;
+                                                    if (isSeries) {
+                                                        if (item.recurringId) seriesId = item.recurringId;
+                                                        else if (typeof item.id === 'string' && item.id.includes(' - wk')) seriesId = item.id.split(' - wk')[0];
+                                                        else if (typeof item.id === 'string' && item.id.includes('- wk')) seriesId = item.id.split('- wk')[0];
+                                                    }
+
+                                                    if (seriesId) {
+                                                        if (processedSeries.has(seriesId)) return;
+
+                                                        const seriesItems = allMetrics.filter(i =>
+                                                            i.recurringId === seriesId ||
+                                                            (i.id && typeof i.id === 'string' && (i.id.startsWith(seriesId + ' - wk') || i.id.startsWith(seriesId + '- wk')))
+                                                        );
+
+                                                        if (seriesItems.length > 1) {
+                                                            processedSeries.add(seriesId);
+                                                            seriesItems.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+                                                            const isPaid = seriesItems.every(i => i.paymentStatus === 'Paid');
+
+                                                            rows.push({
+                                                                id: seriesId,
+                                                                date: seriesItems[0].date,
+                                                                time: seriesItems[0].time,
+                                                                subject: "10-Week Tuition Block",
+                                                                cost: 280,
+                                                                paymentStatus: isPaid ? 'Paid' : 'Due',
+                                                                isGroup: true,
+                                                                seriesIds: seriesItems.map(i => i.id).filter(id => id),
+                                                                itemCount: seriesItems.length
+                                                            });
                                                         } else {
                                                             rows.push(item);
                                                         }
-                                                    });
+                                                    } else {
+                                                        rows.push(item);
+                                                    }
+                                                });
 
-                                                    // Find next due item (earliest unpaid) for global context before mapping?
-                                                    // No, we can do it once.
-                                                    const unpaidRows = rows.filter(r => r.paymentStatus !== 'Paid').sort((a, b) => new Date(a.date) - new Date(b.date));
-                                                    const nextDueId = unpaidRows.length > 0 ? unpaidRows[0].id : null;
+                                                const unpaidRows = rows.filter(r => r.paymentStatus !== 'Paid').sort((a, b) => new Date(a.date) - new Date(b.date));
+                                                const nextDueId = unpaidRows.length > 0 ? unpaidRows[0].id : null;
 
-                                                    return rows.map((invoice) => {
-                                                        // Determine Status Label and Color
-                                                        let statusLabel = invoice.paymentStatus || 'Due';
-                                                        let statusColor = '';
+                                                rows.sort((a, b) => {
+                                                    if (a.id === nextDueId) return -1;
+                                                    if (b.id === nextDueId) return 1;
+                                                    return 0;
+                                                });
 
-                                                        if (invoice.paymentStatus === 'Paid') {
-                                                            statusLabel = 'Completed';
-                                                            statusColor = 'bg-green-100 text-green-700 border border-green-200';
-                                                        } else {
-                                                            if (invoice.id === nextDueId) {
-                                                                statusLabel = 'Due';
-                                                                statusColor = 'bg-red-100 text-red-700 border border-red-200 font-bold animate-pulse';
-                                                            } else {
-                                                                statusLabel = 'Unpaid';
-                                                                statusColor = 'bg-gray-100 text-gray-500 border border-gray-200';
-                                                            }
-                                                        }
+                                                if (rows.length === 0) {
+                                                    return <div className="p-8 text-center text-gray-400 italic">No invoices found.</div>;
+                                                }
 
-                                                        return (
-                                                            <React.Fragment key={invoice.id || Math.random()}>
-                                                                <tr className="hover:bg-gray-50 transition-colors">
-                                                                    <td className="p-4">
-                                                                        <div className="font-bold text-gray-700">{new Date(invoice.date).toLocaleDateString()}</div>
-                                                                        {invoice.isGroup && <div className="text-xs text-purple-600 font-medium">Starts {invoice.time}</div>}
-                                                                        {!invoice.isGroup && <div className="text-xs text-gray-400">{invoice.time}</div>}
-                                                                    </td>
-                                                                    <td className="p-4 text-gray-600 text-sm">
-                                                                        {invoice.subject || invoice.topic || 'Tutoring Session'}
-                                                                        {invoice.isGroup && (
-                                                                            <div className="mt-1">
-                                                                                <span className="text-xs bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full font-bold">10 Sessions</span>
-                                                                                <button
-                                                                                    onClick={() => setExpandedBlockId(expandedBlockId === invoice.id ? null : invoice.id)}
-                                                                                    className="ml-2 text-xs text-purple-700 underline hover:text-purple-900"
-                                                                                >
-                                                                                    {expandedBlockId === invoice.id ? 'Hide Dates' : 'Show Dates'}
-                                                                                </button>
+                                                return rows.map((invoice) => {
+                                                    let statusLabel = invoice.paymentStatus || 'Due';
+                                                    let statusColor = invoice.paymentStatus === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
+                                                    if (invoice.id === nextDueId && invoice.paymentStatus !== 'Paid') statusColor += ' animate-pulse border-red-200 border';
+                                                    if (invoice.paymentStatus === 'Paid') statusLabel = 'Completed';
+
+                                                    return (
+                                                        <div key={invoice.id || Math.random()} className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-500">
+                                                            <div className="flex justify-between items-start mb-3">
+                                                                <div>
+                                                                    <div className="font-bold text-gray-800">{new Date(invoice.date).toLocaleDateString()}</div>
+                                                                    <div className="text-xs text-gray-500">{invoice.time}</div>
+                                                                </div>
+                                                                <div className="text-right">
+                                                                    <div className="font-bold text-xl text-gray-900">£{invoice.cost || 30}</div>
+                                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${statusColor}`}>{statusLabel}</span>
+                                                                </div>
+                                                            </div>
+                                                            <div className="mb-4">
+                                                                <h4 className="text-sm font-bold text-gray-700">{invoice.subject || invoice.topic || 'Tutoring Session'}</h4>
+                                                                {invoice.isGroup && <div className="text-xs text-purple-600 mt-1">10-Session Series</div>}
+                                                            </div>
+
+                                                            {invoice.isGroup && (
+                                                                <button
+                                                                    onClick={() => setExpandedBlockId(expandedBlockId === invoice.id ? null : invoice.id)}
+                                                                    className="w-full mb-3 py-2 text-xs font-bold text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors"
+                                                                >
+                                                                    {expandedBlockId === invoice.id ? 'Hide Dates' : 'Show Lesson Dates'}
+                                                                </button>
+                                                            )}
+
+                                                            {invoice.isGroup && expandedBlockId === invoice.id && (
+                                                                <div className="grid grid-cols-2 gap-2 mb-4 bg-gray-50 p-2 rounded-lg animate-in zoom-in-95 duration-200">
+                                                                    {(() => {
+                                                                        const allItems = [...bookings, ...history];
+                                                                        const series = allItems.filter(i => i.recurringId === invoice.id || (i.id && typeof i.id === 'string' && i.id.startsWith(invoice.id)));
+                                                                        series.sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+                                                                        return series.map((s, i) => (
+                                                                            <div key={i} className="bg-white p-2 rounded border border-gray-200 text-center">
+                                                                                <div className="text-[10px] font-bold text-gray-500">Lesson {i + 1}</div>
+                                                                                <div className="text-xs font-bold text-purple-700">{new Date(s.date).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })}</div>
                                                                             </div>
-                                                                        )}
-                                                                    </td>
-                                                                    <td className="p-4 font-bold text-gray-900">£{invoice.cost || 30}</td>
-                                                                    <td className="p-4">
-                                                                        <span className={`px-2 py-1 rounded-full text-xs font-bold ${statusColor}`}>
-                                                                            {statusLabel}
-                                                                        </span>
-                                                                    </td>
-                                                                    <td className="p-4">
-                                                                        {invoice.isGroup ? (
-                                                                            <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-lg font-bold uppercase tracking-wider border border-gray-200">
-                                                                                Series
-                                                                            </span>
-                                                                        ) : (invoice.feedback_well || invoice.lessonTopic ? (
-                                                                            <span className="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-lg font-black uppercase tracking-wider border border-blue-200 shadow-sm">
-                                                                                Completed
-                                                                            </span>
-                                                                        ) : (
-                                                                            <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-lg font-bold uppercase tracking-wider border border-gray-200">
-                                                                                Scheduled
-                                                                            </span>
-                                                                        ))}
-                                                                    </td>
-                                                                    <td className="p-4 text-right">
-                                                                        {invoice.paymentStatus !== 'Paid' ? (
-                                                                            <div className="flex gap-2 justify-end">
-                                                                                <button
-                                                                                    onClick={() => handlePay(invoice)}
-                                                                                    className="bg-blue-600 text-white px-6 py-2 rounded-lg text-xs font-bold hover:bg-blue-700 shadow-md transition-all"
-                                                                                >
-                                                                                    Pay via Stripe
-                                                                                </button>
-                                                                            </div>
-                                                                        ) : (
-                                                                            <button
-                                                                                onClick={() => handleReceipt(invoice)}
-                                                                                className="text-teal-600 hover:text-teal-700 flex items-center gap-1 justify-end w-full text-xs font-bold transition-colors"
-                                                                            >
-                                                                                <FileText size={14} /> Receipt
-                                                                            </button>
-                                                                        )}
-                                                                    </td>
-                                                                </tr>
-                                                                {invoice.isGroup && expandedBlockId === invoice.id && (
-                                                                    <tr>
-                                                                        <td colSpan="6" className="bg-purple-50 p-4 rounded-xl">
-                                                                            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                                                                                {/* We need to re-fetch or pass the series items here. 
-                                                                                In the mapping above, we have `seriesIds`, but not the full objects in `rows`. 
-                                                                                Ideally, we should store the series items in `invoice.items` or similar.
-                                                                                Let's check the logic above. We have `invoice.seriesIds` and logic to filter `allMetrics`.
-                                                                                But we can't access `allMetrics` easily here inside `rows.map`.
-                                                                                WAIT: `allMetrics` was defined in the scope above `rows`.
-                                                                                So we can re-filter or better yet, attach the items to the row object.
-                                                                            */}
-                                                                                {(() => {
-                                                                                    // Re-fetching logic from scope? No, `allMetrics` is local to the render block?
-                                                                                    // Yes, line 1253: `const seriesItems = allMetrics.filter...`
-                                                                                    // But we didn't attach `seriesItems` to the `rows` object, only `seriesIds`.
-                                                                                    // Let's modify the previous logic to attach `seriesItems` to `invoice`.
-                                                                                    // BUT I can't modify the previous logic in this generic replacement without a huge block.
-                                                                                    // Workaround: Use the `bookings` or `history` state which is in scope of the component?
-                                                                                    // `bookings` and `history` are state variables!
-                                                                                    // We can find them by `invoice.id` (recurringId).
+                                                                        ));
+                                                                    })()}
+                                                                </div>
+                                                            )}
 
-                                                                                    const allItems = [...bookings, ...history];
-                                                                                    const series = allItems.filter(i => i.recurringId === invoice.id || (i.id && typeof i.id === 'string' && i.id.startsWith(invoice.id)));
-                                                                                    series.sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
-
-                                                                                    return series.map((s, i) => (
-                                                                                        <div key={i} className="bg-white p-2 rounded border border-purple-100 text-center">
-                                                                                            <div className="text-xs font-bold text-gray-500">Lesson {i + 1}</div>
-                                                                                            <div className="font-bold text-purple-700">{new Date(s.date).toLocaleDateString()}</div>
-                                                                                            <div className="text-xs text-gray-400">{s.time}</div>
-                                                                                        </div>
-                                                                                    ));
-                                                                                })()}
-                                                                            </div>
-                                                                        </td>
-                                                                    </tr>
-                                                                )}
-                                                            </React.Fragment>
-                                                        );
-                                                    });
-                                                })()}
-                                            </tbody>
-                                        </table>
-                                        {history.length === 0 && (
-                                            <div className="p-8 text-center text-gray-400 italic">No invoices found.</div>
-                                        )}
+                                                            {invoice.paymentStatus !== 'Paid' ? (
+                                                                <button
+                                                                    onClick={() => handlePay(invoice)}
+                                                                    className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md active:scale-95 transition-all text-sm hover:bg-blue-700"
+                                                                >
+                                                                    Pay Amount
+                                                                </button>
+                                                            ) : (
+                                                                <button
+                                                                    onClick={() => handleReceipt(invoice)}
+                                                                    className="w-full py-3 text-teal-600 bg-teal-50 border border-teal-100 rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-teal-100 transition-colors"
+                                                                >
+                                                                    <FileText size={16} /> View Receipt
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                });
+                                            })()}
+                                        </div>
                                     </div>
                                 </div>
                             )
                         }
 
                         {/* Render: MESSAGES */}
-                        {activeTab === 'messages' && (
-                            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                                <div className="flex items-center justify-between">
-                                    <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-3">
-                                        <MessageSquare className="text-teal-500" /> Messages
-                                    </h2>
-                                </div>
-
-                                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                                    {/* Chat Messages */}
-                                    <div className="h-96 overflow-y-auto p-6 space-y-4 bg-gray-50">
-                                        {chatMessages.length === 0 ? (
-                                            <div className="h-full flex items-center justify-center text-gray-400 italic">
-                                                No messages yet. Start a conversation with your teacher!
-                                            </div>
-                                        ) : (
-                                            chatMessages.map((msg, idx) => (
-                                                <div key={idx} className={`flex ${msg.sender === displayName ? 'justify-end' : 'justify-start'} mb-4`}>
-                                                    <div className={`max-w-[70%] px-4 py-3 rounded-2xl shadow-sm ${msg.sender === displayName ? 'bg-gradient-to-br from-teal-500 to-teal-600 text-white rounded-br-md' : 'bg-white border-2 border-gray-100 text-gray-800 rounded-bl-md'}`}>
-                                                        <div className="text-xs font-bold mb-2 ${msg.sender === displayName ? 'text-teal-100' : 'text-gray-500'}">{msg.sender}</div>
-                                                        <div className="text-base leading-relaxed">{msg.message}</div>
-                                                        <div className="text-xs mt-2 ${msg.sender === displayName ? 'text-teal-100' : 'text-gray-400'}">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                                                    </div>
-                                                </div>
-                                            ))
-                                        )}
+                        {
+                            activeTab === 'messages' && (
+                                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                    <div className="flex items-center justify-between">
+                                        <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-3">
+                                            <MessageSquare className="text-teal-500" /> Messages
+                                        </h2>
                                     </div>
 
-                                    {/* Message Input */}
-                                    <div className="p-4 bg-white border-t border-gray-200">
-                                        <div className="flex gap-2">
-                                            <input
-                                                type="text"
-                                                value={newMessage}
-                                                onChange={(e) => setNewMessage(e.target.value)}
-                                                onKeyPress={(e) => {
-                                                    if (e.key === 'Enter' && newMessage.trim()) {
-                                                        const msg = {
-                                                            sender: displayName,
-                                                            message: newMessage,
-                                                            timestamp: new Date().toISOString()
-                                                        };
-                                                        const allMessages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
-                                                        const studentMessages = allMessages[displayName] || [];
-                                                        const updatedStudentMessages = [...studentMessages, msg];
-                                                        const updatedAllMessages = { ...allMessages, [displayName]: updatedStudentMessages };
-                                                        setChatMessages(updatedStudentMessages);
-                                                        localStorage.setItem('chat_messages_v2', JSON.stringify(updatedAllMessages));
-                                                        setNewMessage('');
-                                                    }
-                                                }}
-                                                placeholder="Type your message..."
-                                                className="flex-1 px-4 py-3 rounded-xl border border-gray-200 focus:border-teal-500 outline-none"
-                                            />
-                                            <button
-                                                onClick={() => {
-                                                    if (newMessage.trim()) {
-                                                        const msg = {
-                                                            sender: displayName,
-                                                            message: newMessage,
-                                                            timestamp: new Date().toISOString()
-                                                        };
-                                                        const allMessages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
-                                                        const studentMessages = allMessages[displayName] || [];
-                                                        const updatedStudentMessages = [...studentMessages, msg];
-                                                        const updatedAllMessages = { ...allMessages, [displayName]: updatedStudentMessages };
-                                                        setChatMessages(updatedStudentMessages);
-                                                        localStorage.setItem('chat_messages_v2', JSON.stringify(updatedAllMessages));
-                                                        setNewMessage('');
-                                                    }
-                                                }}
-                                                className="bg-teal-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-teal-700 transition-all"
-                                            >
-                                                Send
-                                            </button>
+                                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                                        {/* Chat Messages */}
+                                        <div className="h-96 overflow-y-auto p-6 space-y-4 bg-gray-50">
+                                            {chatMessages.length === 0 ? (
+                                                <div className="h-full flex items-center justify-center text-gray-400 italic">
+                                                    No messages yet. Start a conversation with your teacher!
+                                                </div>
+                                            ) : (
+                                                chatMessages.map((msg, idx) => (
+                                                    <div key={idx} className={`flex ${msg.sender === displayName ? 'justify-end' : 'justify-start'} mb-4`}>
+                                                        <div className={`max-w-[70%] px-4 py-3 rounded-2xl shadow-sm ${msg.sender === displayName ? 'bg-gradient-to-br from-teal-500 to-teal-600 text-white rounded-br-md' : 'bg-white border-2 border-gray-100 text-gray-800 rounded-bl-md'}`}>
+                                                            <div className="text-xs font-bold mb-2 ${msg.sender === displayName ? 'text-teal-100' : 'text-gray-500'}">{msg.sender}</div>
+                                                            <div className="text-base leading-relaxed">{msg.message}</div>
+                                                            <div className="text-xs mt-2 ${msg.sender === displayName ? 'text-teal-100' : 'text-gray-400'}">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+
+                                        {/* Message Input */}
+                                        <div className="p-4 bg-white border-t border-gray-200">
+                                            <div className="flex gap-2">
+                                                <input
+                                                    type="text"
+                                                    value={newMessage}
+                                                    onChange={(e) => setNewMessage(e.target.value)}
+                                                    onKeyPress={(e) => {
+                                                        if (e.key === 'Enter' && newMessage.trim()) {
+                                                            const msg = {
+                                                                sender: displayName,
+                                                                message: newMessage,
+                                                                timestamp: new Date().toISOString()
+                                                            };
+                                                            const allMessages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
+                                                            const studentMessages = allMessages[displayName] || [];
+                                                            const updatedStudentMessages = [...studentMessages, msg];
+                                                            const updatedAllMessages = { ...allMessages, [displayName]: updatedStudentMessages };
+                                                            setChatMessages(updatedStudentMessages);
+                                                            localStorage.setItem('chat_messages_v2', JSON.stringify(updatedAllMessages));
+                                                            setNewMessage('');
+                                                        }
+                                                    }}
+                                                    placeholder="Type your message..."
+                                                    className="flex-1 px-4 py-3 rounded-xl border border-gray-200 focus:border-teal-500 outline-none"
+                                                />
+                                                <button
+                                                    onClick={() => {
+                                                        if (newMessage.trim()) {
+                                                            const msg = {
+                                                                sender: displayName,
+                                                                message: newMessage,
+                                                                timestamp: new Date().toISOString()
+                                                            };
+                                                            const allMessages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
+                                                            const studentMessages = allMessages[displayName] || [];
+                                                            const updatedStudentMessages = [...studentMessages, msg];
+                                                            const updatedAllMessages = { ...allMessages, [displayName]: updatedStudentMessages };
+                                                            setChatMessages(updatedStudentMessages);
+                                                            localStorage.setItem('chat_messages_v2', JSON.stringify(updatedAllMessages));
+                                                            setNewMessage('');
+                                                        }
+                                                    }}
+                                                    className="bg-teal-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-teal-700 transition-all"
+                                                >
+                                                    Send
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        )}
+                            )
+                        }
 
                     </div >
                 </div >
@@ -1600,257 +1752,269 @@ py - 3 px - 4 rounded - xl font - bold text - sm transition - all border - 2
             }
 
             {/* Notification Modal */}
-            {notification && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setNotification(null)}>
-                    <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 text-center max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${notification.type === 'error' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
-                            {notification.type === 'error' ? <AlertCircle size={24} /> : <CheckCircle size={24} />}
+            {
+                notification && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8" onClick={() => setNotification(null)}>
+                        <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 text-center max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                            <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${notification.type === 'error' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                                {notification.type === 'error' ? <AlertCircle size={24} /> : <CheckCircle size={24} />}
+                            </div>
+                            <p className="text-gray-800 font-bold mb-6 text-lg">{notification.message}</p>
+                            <button
+                                onClick={() => setNotification(null)}
+                                className="w-full py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all"
+                            >
+                                Okay
+                            </button>
                         </div>
-                        <p className="text-gray-800 font-bold mb-6 text-lg">{notification.message}</p>
-                        <button
-                            onClick={() => setNotification(null)}
-                            className="w-full py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all"
-                        >
-                            Okay
-                        </button>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Confirmation Modal */}
-            {confirmation && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
-                    <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-                        <h3 className="text-xl font-bold text-gray-900 mb-4">Confirmation Required</h3>
-                        <p className="text-gray-600 mb-8 whitespace-pre-wrap">{confirmation.message}</p>
-                        <div className="flex gap-3">
-                            <button
-                                onClick={confirmation.onCancel}
-                                className="flex-1 py-3 text-gray-600 font-bold hover:bg-gray-50 rounded-xl transition-all"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={confirmation.onConfirm}
-                                className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 shadow-md transition-all"
-                            >
-                                Confirm
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Payment Modal (Stripe Style) */}
-            {paymentTarget && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
-                    <div className="bg-white p-0 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-                        <div className="bg-gray-50 p-6 border-b border-gray-100 flex justify-between items-center">
-                            <div className="flex items-center gap-2">
-                                <CreditCard className="text-teal-600" />
-                                <span className="font-bold text-gray-900">Secure Payment via Stripe</span>
-                            </div>
-                            <button onClick={() => setPaymentTarget(null)} className="text-gray-400 hover:text-gray-600">✕</button>
-                        </div>
-
-                        <div className="p-8">
-                            <div className="text-center mb-6">
-                                <div className="text-gray-500 text-sm uppercase font-bold tracking-wider mb-1">Total Amount</div>
-                                <div className="text-4xl font-bold text-gray-900">£{paymentTarget.cost || 30}.00</div>
-                                <div className="text-sm text-gray-500 mt-2">
-                                    {paymentTarget.cost === 280 ? '10-Lesson Bulk Block' : `Session on ${new Date(paymentTarget.date).toLocaleDateString()}`}
-                                </div>
-                            </div>
-
-                            <div className="space-y-3 mb-6">
-                                <div className="text-xs font-bold text-gray-400 uppercase text-center mb-2">Secure Stripe Link</div>
-                                {paymentTarget.cost === 280 ? (
-                                    <a
-                                        href="https://buy.stripe.com/eVqbJ1bUX1qnbVcdujeIw01"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="block w-full py-4 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 transition-all shadow-lg flex items-center justify-center gap-2 text-center"
-                                    >
-                                        Complete £280 Payment <ArrowRight size={18} />
-                                    </a>
-                                ) : (
-                                    <a
-                                        href="https://buy.stripe.com/14A3cv5wzglh1gyai7eIw00"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="block w-full py-4 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 transition-all shadow-lg flex items-center justify-center gap-2 text-center"
-                                    >
-                                        Complete £30 Payment <ArrowRight size={18} />
-                                    </a>
-                                )}
-                            </div>
-
-                            <div className="bg-orange-50 p-4 rounded-xl border border-orange-100 text-center">
-                                <p className="text-sm text-orange-800 font-bold mb-3">Completed your payment on Stripe?</p>
-                                <button
-                                    onClick={() => {
-                                        markAsPaid(paymentTarget.id);
-                                        setPaymentTarget(null);
-                                        setNotification({ type: 'success', message: "Payment Recorded! Thank you." });
-                                    }}
-                                    className="w-full py-3 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 transition-all"
-                                >
-                                    Yes, Mark as Paid
-                                </button>
-                            </div>
-
-                            <div className="flex justify-center gap-4 mt-6 opacity-30 grayscale">
-                                <span className="text-xs font-bold">Powered by Stripe</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Edit Note Modal */}
-            {editNoteTarget && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
-                    <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-                            <FileText size={20} className="text-teal-600" /> Lesson Focus
-                        </h3>
-                        <p className="text-gray-500 text-sm mb-4">
-                            What would you like to cover in this session?
-                        </p>
-
-                        <form onSubmit={handleSaveNote}>
-                            <textarea
-                                value={editNoteTarget.currentNote}
-                                onChange={e => setEditNoteTarget({ ...editNoteTarget, currentNote: e.target.value })}
-                                className="w-full border border-gray-200 rounded-xl p-4 min-h-[120px] outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100 transition-all resize-none mb-4"
-                                placeholder="E.g. Algebra quadratic equations, Essay structure..."
-                                autoFocus
-                            />
-
+            {
+                confirmation && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
+                        <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                            <h3 className="text-xl font-bold text-gray-900 mb-4">Confirmation Required</h3>
+                            <p className="text-gray-600 mb-8 whitespace-pre-wrap">{confirmation.message}</p>
                             <div className="flex gap-3">
                                 <button
-                                    type="button"
-                                    onClick={() => setEditNoteTarget(null)}
-                                    className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-50 rounded-xl transition-all"
+                                    onClick={confirmation.onCancel}
+                                    className="flex-1 py-3 text-gray-600 font-bold hover:bg-gray-50 rounded-xl transition-all"
                                 >
                                     Cancel
                                 </button>
                                 <button
-                                    type="submit"
+                                    onClick={confirmation.onConfirm}
                                     className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 shadow-md transition-all"
                                 >
-                                    Save Note
+                                    Confirm
                                 </button>
                             </div>
-                        </form>
+                        </div>
                     </div>
-                </div>
-            )}
+                )
+            }
+
+            {/* Payment Modal (Stripe Style) */}
+            {
+                paymentTarget && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
+                        <div className="bg-white p-0 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                            <div className="bg-gray-50 p-6 border-b border-gray-100 flex justify-between items-center">
+                                <div className="flex items-center gap-2">
+                                    <CreditCard className="text-teal-600" />
+                                    <span className="font-bold text-gray-900">Secure Payment via Stripe</span>
+                                </div>
+                                <button onClick={() => setPaymentTarget(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+                            </div>
+
+                            <div className="p-8">
+                                <div className="text-center mb-6">
+                                    <div className="text-gray-500 text-sm uppercase font-bold tracking-wider mb-1">Total Amount</div>
+                                    <div className="text-4xl font-bold text-gray-900">£{paymentTarget.cost || 30}.00</div>
+                                    <div className="text-sm text-gray-500 mt-2">
+                                        {paymentTarget.cost === 280 ? '10-Lesson Bulk Block' : `Session on ${new Date(paymentTarget.date).toLocaleDateString()}`}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-3 mb-6">
+                                    <div className="text-xs font-bold text-gray-400 uppercase text-center mb-2">Secure Stripe Link</div>
+                                    {paymentTarget.cost === 280 ? (
+                                        <a
+                                            href="https://buy.stripe.com/eVqbJ1bUX1qnbVcdujeIw01"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="block w-full py-4 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 transition-all shadow-lg flex items-center justify-center gap-2 text-center"
+                                        >
+                                            Complete £280 Payment <ArrowRight size={18} />
+                                        </a>
+                                    ) : (
+                                        <a
+                                            href="https://buy.stripe.com/14A3cv5wzglh1gyai7eIw00"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="block w-full py-4 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 transition-all shadow-lg flex items-center justify-center gap-2 text-center"
+                                        >
+                                            Complete £30 Payment <ArrowRight size={18} />
+                                        </a>
+                                    )}
+                                </div>
+
+                                <div className="bg-orange-50 p-4 rounded-xl border border-orange-100 text-center">
+                                    <p className="text-sm text-orange-800 font-bold mb-3">Completed your payment on Stripe?</p>
+                                    <button
+                                        onClick={() => {
+                                            markAsPaid(paymentTarget.id);
+                                            setPaymentTarget(null);
+                                            setNotification({ type: 'success', message: "Payment Recorded! Thank you." });
+                                        }}
+                                        className="w-full py-3 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 transition-all"
+                                    >
+                                        Yes, Mark as Paid
+                                    </button>
+                                </div>
+
+                                <div className="flex justify-center gap-4 mt-6 opacity-30 grayscale">
+                                    <span className="text-xs font-bold">Powered by Stripe</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+
+            {/* Edit Note Modal */}
+            {
+                editNoteTarget && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
+                        <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                            <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                                <FileText size={20} className="text-teal-600" /> Lesson Focus
+                            </h3>
+                            <p className="text-gray-500 text-sm mb-4">
+                                What would you like to cover in this session?
+                            </p>
+
+                            <form onSubmit={handleSaveNote}>
+                                <textarea
+                                    value={editNoteTarget.currentNote}
+                                    onChange={e => setEditNoteTarget({ ...editNoteTarget, currentNote: e.target.value })}
+                                    className="w-full border border-gray-200 rounded-xl p-4 min-h-[120px] outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100 transition-all resize-none mb-4"
+                                    placeholder="E.g. Algebra quadratic equations, Essay structure..."
+                                    autoFocus
+                                />
+
+                                <div className="flex gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setEditNoteTarget(null)}
+                                        className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-50 rounded-xl transition-all"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 shadow-md transition-all"
+                                    >
+                                        Save Note
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )
+            }
 
             {/* Receipt Modal */}
-            {receiptTarget && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
-                    <div className="bg-white p-0 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-                        <div className="bg-gradient-to-r from-teal-500 to-teal-600 p-6 text-white">
-                            <div className="flex justify-between items-start">
-                                <div>
-                                    <h3 className="text-2xl font-bold mb-1">Payment Receipt</h3>
-                                    <p className="text-teal-100 text-sm">Davina's Tutoring Platform</p>
-                                </div>
-                                <button onClick={() => setReceiptTarget(null)} className="text-white/80 hover:text-white text-2xl">×</button>
-                            </div>
-                        </div>
-
-                        <div className="p-8">
-                            <div className="space-y-4 mb-6">
-                                <div className="flex justify-between py-2 border-b border-gray-100">
-                                    <span className="text-gray-500 text-sm">Receipt #</span>
-                                    <span className="font-mono font-bold text-gray-900">{receiptTarget.id?.slice(0, 8) || 'N/A'}</span>
-                                </div>
-                                <div className="flex justify-between py-2 border-b border-gray-100">
-                                    <span className="text-gray-500 text-sm">Date</span>
-                                    <span className="font-bold text-gray-900">{new Date(receiptTarget.date).toLocaleDateString()}</span>
-                                </div>
-                                <div className="flex justify-between py-2 border-b border-gray-100">
-                                    <span className="text-gray-500 text-sm">Student</span>
-                                    <span className="font-bold text-gray-900">{displayName}</span>
-                                </div>
-                                <div className="flex justify-between py-2 border-b border-gray-100">
-                                    <span className="text-gray-500 text-sm">Description</span>
-                                    <span className="font-bold text-gray-900">{receiptTarget.subject || receiptTarget.topic || 'Tutoring Session'}</span>
-                                </div>
-                                <div className="flex justify-between py-3 bg-teal-50 px-4 rounded-xl mt-4">
-                                    <span className="text-gray-700 font-bold">Amount Paid</span>
-                                    <span className="text-2xl font-bold text-teal-600">£{receiptTarget.cost || 30}.00</span>
+            {
+                receiptTarget && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
+                        <div className="bg-white p-0 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                            <div className="bg-gradient-to-r from-teal-500 to-teal-600 p-6 text-white">
+                                <div className="flex justify-between items-start">
+                                    <div>
+                                        <h3 className="text-2xl font-bold mb-1">Payment Receipt</h3>
+                                        <p className="text-teal-100 text-sm">Davina's Tutoring Platform</p>
+                                    </div>
+                                    <button onClick={() => setReceiptTarget(null)} className="text-white/80 hover:text-white text-2xl">×</button>
                                 </div>
                             </div>
 
-                            <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center gap-3 mb-6">
-                                <CheckCircle className="text-green-600" size={24} />
-                                <div>
-                                    <div className="font-bold text-green-900">Payment Confirmed</div>
-                                    <div className="text-xs text-green-700">Thank you for your payment!</div>
+                            <div className="p-8">
+                                <div className="space-y-4 mb-6">
+                                    <div className="flex justify-between py-2 border-b border-gray-100">
+                                        <span className="text-gray-500 text-sm">Receipt #</span>
+                                        <span className="font-mono font-bold text-gray-900">{receiptTarget.id?.slice(0, 8) || 'N/A'}</span>
+                                    </div>
+                                    <div className="flex justify-between py-2 border-b border-gray-100">
+                                        <span className="text-gray-500 text-sm">Date</span>
+                                        <span className="font-bold text-gray-900">{new Date(receiptTarget.date).toLocaleDateString()}</span>
+                                    </div>
+                                    <div className="flex justify-between py-2 border-b border-gray-100">
+                                        <span className="text-gray-500 text-sm">Student</span>
+                                        <span className="font-bold text-gray-900">{displayName}</span>
+                                    </div>
+                                    <div className="flex justify-between py-2 border-b border-gray-100">
+                                        <span className="text-gray-500 text-sm">Description</span>
+                                        <span className="font-bold text-gray-900">{receiptTarget.subject || receiptTarget.topic || 'Tutoring Session'}</span>
+                                    </div>
+                                    <div className="flex justify-between py-3 bg-teal-50 px-4 rounded-xl mt-4">
+                                        <span className="text-gray-700 font-bold">Amount Paid</span>
+                                        <span className="text-2xl font-bold text-teal-600">£{receiptTarget.cost || 30}.00</span>
+                                    </div>
                                 </div>
-                            </div>
 
-                            <button
-                                onClick={() => setReceiptTarget(null)}
-                                className="w-full py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all"
-                            >
-                                Close
-                            </button>
+                                <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center gap-3 mb-6">
+                                    <CheckCircle className="text-green-600" size={24} />
+                                    <div>
+                                        <div className="font-bold text-green-900">Payment Confirmed</div>
+                                        <div className="text-xs text-green-700">Thank you for your payment!</div>
+                                    </div>
+                                </div>
+
+                                <button
+                                    onClick={() => setReceiptTarget(null)}
+                                    className="w-full py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all"
+                                >
+                                    Close
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Cancel Booking Modal */}
-            {cancelTarget && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
-                    <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-                        <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
-                            <Trash2 size={24} />
-                        </div>
-                        <h3 className="text-xl font-bold text-gray-900 mb-2">Cancel Lesson</h3>
-                        <p className="text-gray-600 mb-6">
-                            Are you sure you want to cancel your lesson on <strong>{new Date(cancelTarget.date).toLocaleDateString()}</strong> at {cancelTarget.time}?
-                            {cancelTarget.recurringId && " This is part of a recurring series."}
-                        </p>
+            {
+                cancelTarget && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-start justify-center p-4 overflow-y-auto pt-8 pb-8">
+                        <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                            <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
+                                <Trash2 size={24} />
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900 mb-2">Cancel Lesson</h3>
+                            <p className="text-gray-600 mb-6">
+                                Are you sure you want to cancel your lesson on <strong>{new Date(cancelTarget.date).toLocaleDateString()}</strong> at {cancelTarget.time}?
+                                {cancelTarget.recurringId && " This is part of a recurring series."}
+                            </p>
 
-                        <div className="flex flex-col gap-3">
-                            {cancelTarget.recurringId ? (
-                                <>
+                            <div className="flex flex-col gap-3">
+                                {cancelTarget.recurringId ? (
+                                    <>
+                                        <button
+                                            onClick={() => handleConfirmCancellation(false)}
+                                            className="w-full py-3 bg-white border-2 border-red-500 text-red-600 rounded-xl font-bold hover:bg-red-50 transition-all"
+                                        >
+                                            Cancel Just This Lesson
+                                        </button>
+                                        <button
+                                            onClick={() => handleConfirmCancellation(true)}
+                                            className="w-full py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-md transition-all"
+                                        >
+                                            Cancel Entire Series
+                                        </button>
+                                    </>
+                                ) : (
                                     <button
                                         onClick={() => handleConfirmCancellation(false)}
-                                        className="w-full py-3 bg-white border-2 border-red-500 text-red-600 rounded-xl font-bold hover:bg-red-50 transition-all"
-                                    >
-                                        Cancel Just This Lesson
-                                    </button>
-                                    <button
-                                        onClick={() => handleConfirmCancellation(true)}
                                         className="w-full py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-md transition-all"
                                     >
-                                        Cancel Entire Series
+                                        Confirm Cancellation
                                     </button>
-                                </>
-                            ) : (
+                                )}
                                 <button
-                                    onClick={() => handleConfirmCancellation(false)}
-                                    className="w-full py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-md transition-all"
+                                    onClick={() => setCancelTarget(null)}
+                                    className="w-full py-3 text-gray-500 font-bold hover:bg-gray-50 rounded-xl transition-all"
                                 >
-                                    Confirm Cancellation
+                                    Keep Lesson
                                 </button>
-                            )}
-                            <button
-                                onClick={() => setCancelTarget(null)}
-                                className="w-full py-3 text-gray-500 font-bold hover:bg-gray-50 rounded-xl transition-all"
-                            >
-                                Keep Lesson
-                            </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
         </div >
     );
 };
