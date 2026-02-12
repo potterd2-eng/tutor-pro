@@ -118,11 +118,63 @@ const TeacherDashboard = () => {
     const [rescheduleTarget, setRescheduleTarget] = useState(null); // { booking, mode: 'single' | 'series' }
     const [rescheduleConfig, setRescheduleConfig] = useState({ newDate: '', newTime: '14:00', applyToSeries: false });
 
-    // Delete Confirmation State
-    const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, type: 'slot' | 'booking', data }
 
-    const handleDeleteClick = (slot) => {
-        setDeleteConfirm({ id: slot.id, type: 'slot', data: slot });
+    // Cancellation Confirmation State
+    const [cancelConfirm, setCancelConfirm] = useState(null); // { booking, mode: 'single' | 'series' | null }
+
+    const handleCancelClick = (booking) => {
+        setCancelConfirm({ booking, mode: null });
+    };
+
+    const confirmCancellation = (cancelMode) => {
+        if (!cancelConfirm) return;
+        const { booking } = cancelConfirm;
+
+        let updatedBookings;
+        let bookingsToCancel = [];
+
+        if (cancelMode === 'series' && booking.recurringId) {
+            // Cancel all future lessons in the series starting from this date
+            bookingsToCancel = bookings.filter(b =>
+                b.recurringId === booking.recurringId &&
+                b.status !== 'cancelled' &&
+                new Date(b.date) >= new Date(booking.date)
+            );
+            updatedBookings = bookings.map(b =>
+                (b.recurringId === booking.recurringId && new Date(b.date) >= new Date(booking.date))
+                    ? { ...b, status: 'cancelled' }
+                    : b
+            );
+        } else {
+            bookingsToCancel = [booking];
+            updatedBookings = bookings.map(b => b.id === booking.id ? { ...b, status: 'cancelled' } : b);
+        }
+
+        setBookings(updatedBookings);
+        localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+
+        // Also update lessonSlots if applicable
+        const updatedSlots = lessonSlots.map(slot => {
+            const isCancelled = bookingsToCancel.some(b => b.date === slot.date && b.time === slot.time);
+            return isCancelled ? { ...slot, bookedBy: null } : slot;
+        });
+        setLessonSlots(updatedSlots);
+        localStorage.setItem('tutor_lesson_slots', JSON.stringify(updatedSlots));
+
+        // Notify Students
+        bookingsToCancel.forEach(b => {
+            emailService.sendCancellationNotice({
+                student: b.student,
+                email: 'student@example.com', // Real app would look up email
+                date: b.date,
+                time: b.time,
+                topic: b.subject || 'Lesson'
+            }).catch(err => console.error("Email error:", err));
+        });
+
+        window.dispatchEvent(new Event('storage'));
+        setNotification({ type: 'success', message: cancelMode === 'series' ? 'Entire series cancelled.' : 'Booking cancelled.' });
+        setCancelConfirm(null);
     };
 
     const confirmDelete = () => {
@@ -134,8 +186,6 @@ const TeacherDashboard = () => {
         localStorage.setItem('tutor_lesson_slots', JSON.stringify(updated));
 
         // Also checks if there was a booking associated with this slot time?
-        // The slot object has 'bookedBy'. match it?
-        // Ideally we should cancel the booking too if it exists.
         const slot = deleteConfirm.data;
         if (slot.bookedBy) {
             // Find booking
@@ -149,7 +199,7 @@ const TeacherDashboard = () => {
                 // Notify Student
                 emailService.sendCancellationNotice({
                     student: booking.student,
-                    email: 'student@example.com', // In a real app, look up student email
+                    email: 'student@example.com',
                     date: booking.date,
                     time: booking.time,
                     topic: booking.topic || 'Lesson'
@@ -234,13 +284,13 @@ const TeacherDashboard = () => {
 
     const paidEarnings = sessionHistory
         .filter(s => s.paymentStatus && s.paymentStatus.toLowerCase() === 'paid')
-        .reduce((sum, s) => sum + (Number(s.cost) || 30), 0);
+        .reduce((sum, s) => sum + (s.cost !== undefined ? Number(s.cost) : 30), 0);
 
     // Outstanding = Completed lessons that are NOT marked as 'Paid'
     // This is work already done but money not yet received.
     const completedUnpaid = sessionHistory
-        .filter(s => (!s.paymentStatus || s.paymentStatus.toLowerCase() !== 'paid') && s.subject !== 'Free Consultation')
-        .reduce((sum, s) => sum + (Number(s.cost) || (s.type === 'consultation' ? 0 : 30)), 0);
+        .filter(s => (!s.paymentStatus || s.paymentStatus.toLowerCase() !== 'paid'))
+        .reduce((sum, s) => sum + (s.cost !== undefined ? Number(s.cost) : (s.type === 'consultation' ? 0 : 30)), 0);
 
     // Upcoming = Bookings in the future
     const futureBookings = bookings.filter(b =>
@@ -249,7 +299,7 @@ const TeacherDashboard = () => {
         b.subject !== 'Free Consultation' &&
         b.status !== 'cancelled'
     );
-    const futureEarnings = futureBookings.reduce((sum, b) => sum + (Number(b.cost) || 30), 0);
+    const futureEarnings = futureBookings.reduce((sum, b) => sum + (b.cost !== undefined ? Number(b.cost) : 30), 0);
 
     // Real Outstanding = Completed Unpaid (Past)
     // Projected = Past Unpaid + Future Booked
@@ -272,7 +322,7 @@ const TeacherDashboard = () => {
 
         const bookedLessons = monthItems.filter(i => i.type === 'lesson').length;
         const consultations = monthItems.filter(i => i.type === 'consultation').length;
-        const projectedEarnings = monthItems.reduce((sum, item) => sum + (Number(item.cost) || 0), 0);
+        const projectedEarnings = monthItems.reduce((sum, item) => sum + (item.cost !== undefined ? Number(item.cost) : (item.type === 'consultation' ? 0 : 30)), 0);
 
         return {
             monthName,
@@ -289,7 +339,7 @@ const TeacherDashboard = () => {
                 lDate.getMonth() === currentMonth &&
                 lDate.getFullYear() === currentYear;
         })
-        .reduce((sum, s) => sum + (Number(s.cost) || 30), 0);
+        .reduce((sum, s) => sum + (s.cost !== undefined ? Number(s.cost) : 30), 0);
 
     const projectedThisMonth = monthlyProjections[0].projectedEarnings;
     const lessonsThisMonth = monthlyProjections[0].bookedLessons;
@@ -324,16 +374,17 @@ const TeacherDashboard = () => {
     };
 
     const startLesson = (student) => {
-        // Use window.open to prevent navigation issues
-        const sessionUrl = `/session/${student.id}?host=true&student=${encodeURIComponent(student.name)}&type=lesson`;
+        // Create an ad-hoc session ID if no booking exists, but ideally we should have one
+        const roomId = student.id || Date.now().toString();
+        const sessionUrl = `/session/${roomId}?host=true&student=${encodeURIComponent(student.name)}&type=lesson`;
         window.open(sessionUrl, '_blank');
     };
 
     const handleJoinLesson = (booking) => {
-        // Fallback to booking.id if studentId missing (but simple bookings might trigger this)
-        const roomId = booking.studentId || booking.id;
+        // Use booking.id as the definitive roomId for sync
+        const roomId = booking.id;
         const type = booking.type || 'lesson';
-        const sessionUrl = `/session/${roomId}?host=true&student=${encodeURIComponent(booking.student)}&type=${type}`;
+        const sessionUrl = `/session/${roomId}?host=true&student=${encodeURIComponent(booking.student || booking.studentName)}&type=${type}`;
         navigate(sessionUrl);
     };
 
@@ -1406,6 +1457,7 @@ const TeacherDashboard = () => {
                                                     <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Student</th>
                                                     <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Subject</th>
                                                     <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Fee</th>
+                                                    <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Actions</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-gray-50">
@@ -1432,6 +1484,15 @@ const TeacherDashboard = () => {
                                                         <td className="px-6 py-4 text-sm text-gray-500">{booking.subject}</td>
                                                         <td className="px-6 py-4 text-right">
                                                             <span className="font-black text-gray-900">£{booking.cost || 30}</span>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-right">
+                                                            <button
+                                                                onClick={() => handleCancelClick(booking)}
+                                                                className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                                                                title="Cancel Booking"
+                                                            >
+                                                                <Trash2 size={16} />
+                                                            </button>
                                                         </td>
                                                     </tr>
                                                 ))}
@@ -2291,15 +2352,7 @@ const TeacherDashboard = () => {
                                         </div>
                                         <button
                                             onClick={() => {
-                                                if (window.confirm(`Are you sure you want to cancel this lesson with ${rescheduleTarget.student}?`)) {
-                                                    const updatedB = bookings.map(b => b.id === rescheduleTarget.id ? { ...b, status: 'cancelled' } : b);
-                                                    setBookings(updatedB);
-                                                    localStorage.setItem('tutor_bookings', JSON.stringify(updatedB));
-                                                    window.dispatchEvent(new Event('storage'));
-                                                    emailService.sendCancellationNotice(rescheduleTarget, 'teacher');
-                                                    setRescheduleTarget(null);
-                                                    setSelectedDate(null);
-                                                }
+                                                handleCancelClick(rescheduleTarget);
                                             }}
                                             className="w-full py-2.5 text-red-600 font-bold hover:bg-red-50 rounded-xl transition-all border border-red-100 mt-2"
                                         >
@@ -2341,6 +2394,34 @@ const TeacherDashboard = () => {
                         </div>
                     )
                 }
+                {/* Cancellation Confirmation Modal */}
+                {
+                    cancelConfirm && (
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[150] flex items-center justify-center p-4" onClick={() => setCancelConfirm(null)}>
+                            <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 text-center" onClick={e => e.stopPropagation()}>
+                                <Trash2 className="mx-auto text-red-500 mb-4" size={40} />
+                                <h3 className="text-xl font-black mb-2">Cancel Lesson?</h3>
+                                <p className="text-gray-500 mb-6 font-bold text-sm">
+                                    {cancelConfirm.booking.recurringId
+                                        ? "This session is part of a recurring series. Would you like to cancel just this one, or the entire series?"
+                                        : `Are you sure you want to cancel the session for ${cancelConfirm.booking.student} on ${new Date(cancelConfirm.booking.date).toLocaleDateString('en-GB')} at ${cancelConfirm.booking.time}?`}
+                                </p>
+                                <div className="flex flex-col gap-3">
+                                    {cancelConfirm.booking.recurringId ? (
+                                        <>
+                                            <button onClick={() => confirmCancellation('single')} className="w-full py-3 bg-red-100 text-red-600 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-red-200 transition-all">Cancel Just This One</button>
+                                            <button onClick={() => confirmCancellation('series')} className="w-full py-3 bg-red-600 text-white rounded-xl font-black shadow-lg uppercase tracking-widest text-xs hover:bg-red-700 transition-all">Cancel Entire Series</button>
+                                        </>
+                                    ) : (
+                                        <button onClick={() => confirmCancellation('single')} className="w-full py-3 bg-red-600 text-white rounded-xl font-black shadow-lg uppercase tracking-widest text-xs">Confirm Cancellation</button>
+                                    )}
+                                    <button onClick={() => setCancelConfirm(null)} className="w-full py-3 text-gray-400 font-black uppercase tracking-widest text-xs">Keep Session</button>
+                                </div>
+                            </div>
+                        </div>
+                    )
+                }
+
                 {/* Notification UI */}
                 {notification && (
                     <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] animate-in slide-in-from-bottom-10">

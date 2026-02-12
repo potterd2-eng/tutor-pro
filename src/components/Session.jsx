@@ -10,7 +10,9 @@ const Session = () => {
     const { roomId } = useParams();
     const [searchParams] = useSearchParams();
     const navigate = useNavigate();
-    const isHost = searchParams.get('host') === 'true';
+    // Robust Host Detection: Check URL param OR localStorage auth
+    const isAuthenticatedTutor = localStorage.getItem('tutor_authenticated') === 'true';
+    const isHost = searchParams.get('host') === 'true' || isAuthenticatedTutor;
     const studentName = searchParams.get('student'); // Keep original variable name
     const sessionType = searchParams.get('type') || 'lesson'; // 'lesson' or 'consultation'
     const isStudent = !isHost;

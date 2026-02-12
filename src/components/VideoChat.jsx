@@ -18,23 +18,66 @@ const VideoChat = ({ onConnection, isStudent, isHost, roomId }) => {
     const callsRef = useRef([]); // Track active calls for track replacement
     const connRef = useRef(null); // Track active data connection for signaling
 
+    // Helper: Sanitize ID for PeerJS (replace colons/invalid chars with hyphens)
+    const sanitizeId = (id) => id ? id.replace(/[^a-zA-Z0-9-_]/g, '-') : undefined;
+
     useEffect(() => {
         if (!roomId) return;
 
         // Clean up previous peer if any
         if (peerRef.current) peerRef.current.destroy();
 
-        // If Host: Use roomId as our ID
+        // If Host: Use sanitized roomId as our ID
         // If Student: Use random ID (undefined)
-        const myId = isStudent ? undefined : roomId;
-
-        console.log(`Initializing Peer. isStudent=${isStudent}, roomId=${roomId}, myId=${myId}`);
+        const myId = isStudent ? undefined : sanitizeId(roomId);
 
         const peer = new Peer(myId, {
-            debug: 2
+            debug: 2,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' },
+                ]
+            }
         });
 
-        // 1. Get Local Stream FIRST
+        peerRef.current = peer;
+
+        // 1. Initialize Peer Events IMMEDIATELY (Don't wait for camera)
+        peer.on('error', (err) => {
+            console.error("Peer error:", err);
+            // Ignore peer-unavailable as it will be handled by the retry logic for students
+            // and often just means the other side isn't ready yet.
+            if (err.type === 'peer-unavailable') {
+                console.log("Peer unavailable (expected during connection/refresh), retrying...");
+                return;
+            }
+            setError(`Connection Error: ${err.type} - ${err.message}`);
+        });
+
+        peer.on('open', (id) => {
+            console.log("My Peer ID:", id);
+            setPeerId(id);
+            // Student connects to the SANITIZED Host ID
+            if (isStudent) setRemotePeerId(sanitizeId(roomId));
+        });
+
+        peer.on('connection', (conn) => {
+            console.log("Incoming data connection established");
+            connRef.current = conn;
+            conn.on('open', () => {
+                if (onConnection) onConnection(conn);
+            });
+            conn.on('data', (data) => {
+                if (data && data.type === 'screenShareStarted') setEnlargedFeed('remote');
+                else if (data && data.type === 'screenShareStopped') setEnlargedFeed(null);
+
+                if (window.externalDraw) window.externalDraw(data);
+            });
+        });
+
+        // 2. Get Local Stream
         navigator.mediaDevices.getUserMedia({ video: true, audio: true })
             .then((ms) => {
                 setStream(ms);
@@ -116,54 +159,34 @@ const VideoChat = ({ onConnection, isStudent, isHost, roomId }) => {
                 });
             });
 
-        peer.on('error', (err) => {
-            console.error("Peer error:", err);
-            setError(`Connection Error: ${err.type} - ${err.message}`);
-        });
-
-        peer.on('open', (id) => {
-            console.log("My Peer ID:", id);
-            setPeerId(id);
-
-            // If Student, we need to connect to the Host (roomId)
-            if (isStudent) {
-                setRemotePeerId(roomId);
-                // The useEffect [stream, remotePeerId] will trigger the call
-            }
-        });
-
-        peer.on('connection', (conn) => {
-            connRef.current = conn;
-            conn.on('open', () => {
-                if (onConnection) onConnection(conn);
-            });
-            conn.on('data', (data) => {
-                if (data && data.type === 'screenShareStarted') {
-                    setEnlargedFeed('remote');
-                } else if (data && data.type === 'screenShareStopped') {
-                    setEnlargedFeed(null);
-                }
-                if (window.externalDraw) window.externalDraw(data);
-            });
-        });
-
-        peerRef.current = peer;
-
         return () => {
-            // peer.destroy(); // Optional cleanup
-        }
-    }, []);
+            if (peerRef.current) peerRef.current.destroy();
+        };
+    }, [roomId, isStudent]); // roomId and isStudent are stable or change on route change
 
     // Watch for stream + remoteId availability to connect
     useEffect(() => {
+        let retryInterval;
+
         if (stream && remotePeerId && peerRef.current && !peerRef.current.disconnected) {
-            // Simple check: do we already have a connection/call?
-            // Since this runs once when stream becomes available, it should be safe.
-            // We can check if we are already calling? PeerJS doesn't make it easy to check active calls.
-            // Let's just call.
             console.log("Stream ready, auto-connecting to", remotePeerId);
             connectToPeer(remotePeerId);
+
+            // Add a periodic retry if connection hasn't been established
+            // This handles cases where the student joins BEFORE the teacher
+            if (isStudent) {
+                retryInterval = setInterval(() => {
+                    if (!connRef.current || !connRef.current.open) {
+                        console.log("Retrying connection to teacher...");
+                        connectToPeer(remotePeerId);
+                    }
+                }, 5000); // Retry every 5 seconds
+            }
         }
+
+        return () => {
+            if (retryInterval) clearInterval(retryInterval);
+        };
     }, [stream, remotePeerId]);
 
 

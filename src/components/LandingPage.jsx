@@ -9,6 +9,7 @@ import {
 import CryptoJS from 'crypto-js';
 import profilePic from '../assets/profile.jpg'; // Import profile picture
 import { emailService } from '../utils/email';
+import { dataService } from '../services/dataService';
 import { generateGoogleCalendarUrl } from '../utils/calendar';
 
 const formatName = (name) => {
@@ -33,28 +34,13 @@ const BookingGrid = ({ onBook }) => {
     const [confirmationData, setConfirmationData] = useState(null);
 
     useEffect(() => {
-        const loadSlots = () => {
-            const bookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
-            const customSlots = JSON.parse(localStorage.getItem('tutor_available_slots') || '[]');
+        const loadSlots = async () => {
+            const { consultationSlots } = await dataService.getAvailability();
+            console.log("Loading Consultation Slots:", consultationSlots ? consultationSlots.length : 0);
 
-            let allInitialSlots = [];
-            
-            // If custom slots exist, use them. OTHERWISE use the base hardcoded slots.
-            if (customSlots && customSlots.length > 0) {
-                allInitialSlots = customSlots;
-            } else {
-                 const baseSlots = [
-                    { id: 'b1', date: '2026-02-16', time: '16:00' },
-                    { id: 'b2', date: '2026-02-16', time: '17:00' },
-                    { id: 'b3', date: '2026-02-17', time: '16:00' },
-                    { id: 'b4', date: '2026-02-18', time: '15:30' },
-                    { id: 'b5', date: '2026-02-19', time: '17:00' }
-                ];
-                allInitialSlots = baseSlots;
+            if (consultationSlots) {
+                setAvailableSlots(consultationSlots);
             }
-
-            const finalSlots = allInitialSlots.filter(slot => !bookings.some(b => b.date === slot.date && b.time === slot.time));
-            setAvailableSlots(finalSlots);
         };
         loadSlots();
         window.addEventListener('storage', loadSlots);
@@ -103,55 +89,33 @@ const BookingGrid = ({ onBook }) => {
 
     return (
         <div className="flex flex-col md:flex-row gap-8 min-h-[500px]">
-            <div className="md:w-1/3 overflow-y-auto pr-2">
+
+            <div className="md:w-1/3 md:max-h-[450px] overflow-y-auto pr-2 custom-scrollbar">
                 <h3 className="font-bold text-gray-400 uppercase text-xs mb-3">Select Date</h3>
                 <div className="space-y-2">
                     {sortedDates.map(date => (
-                        <button key={date} onClick={() => setSelectedDay(date)} className={`w-full p-4 rounded-xl text-left border-2 ${selectedDay === date ? 'border-purple-600 bg-purple-50' : 'border-white bg-white'}`}>
+                        <button key={date} onClick={() => setSelectedDay(date)} className={`w-full p-4 rounded-xl text-left border-2 transition-all ${selectedDay === date ? 'border-purple-600 bg-purple-50 ring-2 ring-purple-100' : 'border-white bg-white hover:border-purple-100'}`}>
                             <div className="font-bold text-sm uppercase text-gray-400">{new Date(date).toLocaleDateString('en-GB', { weekday: 'long' })}</div>
                             <div className="font-extrabold text-xl text-gray-800">{new Date(date).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })}</div>
                         </button>
                     ))}
                 </div>
             </div>
+
             <div className="md:w-2/3 bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
                 {selectedDay ? (
                     <div className="grid grid-cols-3 gap-3">
                         {slotsByDate[selectedDay].map(slot => (
-                            <button key={slot.id} onClick={() => { setSelectedSlot(slot); setShowBookingModal(true); }} className="py-2 px-1 rounded-lg border border-gray-200 hover:bg-purple-600 hover:text-white transition-all text-sm font-bold">
+                            <button key={slot.id} onClick={() => {
+                                setSelectedSlot(slot);
+                                if (onBook) onBook({ date: slot.date, time: slot.time });
+                            }} className="py-2 px-1 rounded-lg border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-600 hover:text-white transition-all text-sm font-bold shadow-sm">
                                 {slot.time}
                             </button>
                         ))}
                     </div>
                 ) : <div className="h-full flex items-center justify-center text-gray-300">Select a date</div>}
             </div>
-
-            {showBookingModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
-                    <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
-                        <h2 className="text-2xl font-bold mb-6">Confirm Consultation</h2>
-                        <form onSubmit={confirmBooking} className="space-y-4">
-                            <input required type="text" value={bookingName} onChange={e => setBookingName(e.target.value)} placeholder="Your Name" className="w-full px-4 py-3 rounded-xl border" />
-                            <input required type="email" value={bookingEmail} onChange={e => setBookingEmail(e.target.value)} placeholder="Email" className="w-full px-4 py-3 rounded-xl border" />
-                            <select required value={bookingSubject} onChange={e => setBookingSubject(e.target.value)} className="w-full px-4 py-3 rounded-xl border">
-                                <option value="">Select Subject</option>
-                                <option value="Maths KS3">Maths KS3</option>
-                                <option value="Maths GCSE">Maths GCSE</option>
-                                <option value="Sociology GCSE">Sociology GCSE</option>
-                                <option value="Sociology A Level">Sociology A Level</option>
-                            </select>
-                            <label className="flex items-start gap-3 text-xs">
-                                <input type="checkbox" required checked={gdprConsent} onChange={e => setGdprConsent(e.target.checked)} className="mt-1" />
-                                <span>I agree to the Terms and Privacy Policy.</span>
-                            </label>
-                            <div className="flex gap-3">
-                                <button type="button" onClick={() => setShowBookingModal(false)} className="flex-1 py-3 text-gray-500 font-bold">Cancel</button>
-                                <button type="submit" className="flex-1 py-3 bg-purple-600 text-white rounded-xl font-bold">Confirm</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            )}
 
             {confirmationData && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
@@ -184,6 +148,48 @@ const LandingPage = () => {
     const [showConsultationChoiceModal, setShowConsultationChoiceModal] = useState(false);
     const [consultationStep, setConsultationStep] = useState('initial'); // 'initial' or 'who-are-you'
     const [selectedSubject, setSelectedSubject] = useState(null);
+
+    // Data Repair: Ensure existing consultations are marked as free/paid
+    useEffect(() => {
+        const repairData = () => {
+            const bookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+            let changed = false;
+            const updated = bookings.map(b => {
+                if (b.type === 'consultation') {
+                    if (b.paymentStatus !== 'Paid' || b.cost !== 0) {
+                        changed = true;
+                        return { ...b, paymentStatus: 'Paid', cost: 0 };
+                    }
+                }
+                return b;
+            });
+
+            if (changed) {
+                localStorage.setItem('tutor_bookings', JSON.stringify(updated));
+                window.dispatchEvent(new Event('storage'));
+            }
+
+            // Also repair session history
+            const history = JSON.parse(localStorage.getItem('tutor_session_history') || '[]');
+            let historyChanged = false;
+            const updatedHistory = history.map(h => {
+                if (h.type === 'consultation' || h.subject === 'Free Consultation') {
+                    if (h.paymentStatus !== 'Paid' || h.cost !== 0) {
+                        historyChanged = true;
+                        return { ...h, paymentStatus: 'Paid', cost: 0 };
+                    }
+                }
+                return h;
+            });
+
+            if (historyChanged) {
+                localStorage.setItem('tutor_session_history', JSON.stringify(updatedHistory));
+                window.dispatchEvent(new Event('storage'));
+            }
+        };
+
+        repairData();
+    }, []);
     const [isUnder16, setIsUnder16] = useState(null); // null, true, or false
     const [loginType, setLoginType] = useState('existing'); // 'new' or 'existing' for parent sign-in
     const [pendingBooking, setPendingBooking] = useState(null);
@@ -199,22 +205,28 @@ const LandingPage = () => {
         if (!pendingBooking) return;
 
         const bookingId = 'consult-' + Date.now().toString(36);
-        const meetingLink = `${window.location.origin}/session/${bookingId}?host=false&name=${encodeURIComponent(userDetails.name || pendingBooking.name)}`;
-        const formattedStudentName = formatName(userDetails.name || pendingBooking.name);
+        // Robust name extraction
+        const rawName = userDetails.name || userDetails.firstName || userDetails.studentName || pendingBooking.name || 'Student';
+        const formattedStudentName = formatName(rawName);
+
+        const meetingLink = `${window.location.origin}/session/${bookingId}?host=false&student=${encodeURIComponent(formattedStudentName)}`;
+
+        // Use subject from userDetails (signup form) if available, otherwise fallback (e.g. from payment flow)
+        const bookingSubject = userDetails.subject || pendingBooking.subject || 'Consultation';
 
         const newBooking = {
             id: bookingId,
             date: pendingBooking.date,
             time: pendingBooking.time,
             student: formattedStudentName,
-            email: pendingBooking.email, // Use booking email as contact
-            subject: pendingBooking.subject,
+            email: userDetails.email || pendingBooking.email, // Prefer user email
+            subject: bookingSubject,
             bookingFor: userType, // 'student' or 'parent'
             studentName: formattedStudentName,
             type: 'consultation',
             meetingLink: meetingLink,
             bookedAt: new Date().toISOString(),
-            paymentStatus: 'Payment Due', // Default to Due if not paid
+            paymentStatus: 'Paid', // consultations are free, so considered Paid/Settled
             cost: 0, // Free consultation
             status: 'confirmed',
             studentId: userDetails.id, // Link to user
@@ -226,8 +238,9 @@ const LandingPage = () => {
         localStorage.setItem('tutor_bookings', JSON.stringify(bookings));
         window.dispatchEvent(new Event('storage'));
 
-        // Send email
+        // Send Emails
         emailService.sendConfirmation({ ...newBooking, link: meetingLink }).catch(err => console.error(err));
+        emailService.sendTeacherNotification(newBooking).catch(err => console.error(err));
 
         setPendingBooking(null);
         setNotification({ type: 'success', message: 'Booking Confirmed! You can now view it in your dashboard.' });
@@ -300,6 +313,9 @@ const LandingPage = () => {
         <div className="min-h-screen bg-brand-light font-sans text-brand-navy scroll-smooth">
             {/* Navigation */}
             <nav className="fixed top-0 w-full bg-white/90 backdrop-blur-md shadow-sm z-50 px-6 py-4">
+
+
+
                 <div className="max-w-6xl mx-auto flex justify-between items-center">
                     <div className="flex items-center gap-2 text-purple-600 font-bold text-xl cursor-pointer" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
                         <GraduationCap size={32} />
@@ -313,7 +329,7 @@ const LandingPage = () => {
                     </div>
                     <div className="flex items-center gap-4">
                         <button
-                            onClick={() => setShowLoginModal(true)}
+                            onClick={() => { setSelectedSubject(null); setShowLoginModal(true); }}
                             className="text-purple-600 font-bold hover:bg-purple-50 px-4 py-2 rounded-lg transition-colors"
                         >
                             Log In
@@ -357,6 +373,9 @@ const LandingPage = () => {
                                         className="w-full px-5 py-4 text-left hover:bg-teal-50 transition-colors"
                                     >
                                         <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 bg-teal-100 rounded-full flex items-center justify-center">
+                                                <BookOpen size={20} className="text-teal-600" />
+                                            </div>
                                             <div>
                                                 <div className="font-bold text-gray-900">Book First Lesson</div>
                                                 <div className="text-xs text-gray-500">1-hour paid session</div>
@@ -372,6 +391,9 @@ const LandingPage = () => {
                                         className="w-full px-5 py-4 text-left hover:bg-teal-50 transition-colors"
                                     >
                                         <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center">
+                                                <Video size={20} className="text-yellow-600" />
+                                            </div>
                                             <div>
                                                 <div className="font-bold text-gray-900">Book 10 Hour Lesson Block</div>
                                                 <div className="text-xs text-secondary-500">Discount for the 10 lesson bundle</div>
@@ -401,7 +423,7 @@ const LandingPage = () => {
                     </p>
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
                         <button
-                            onClick={() => scrollToSection('booking')}
+                            onClick={() => { setSelectedSubject(null); scrollToSection('booking'); }}
                             className="w-full sm:w-auto px-8 py-4 bg-purple-600 text-white rounded-xl font-bold text-lg shadow-lg hover:bg-purple-700 transition-all flex items-center justify-center gap-2"
                         >
                             <Calendar size={20} />
@@ -1073,6 +1095,9 @@ const LandingPage = () => {
                                     if (student) {
                                         // Check if student name is Sarah and PIN is 1234 (explicit request)
                                         if (student.name.toLowerCase() === 'sarah' && pin === '1234') {
+                                            if (pendingBooking) {
+                                                finalizeBooking('student', student);
+                                            }
                                             setShowStudentBookingModal(false);
                                             navigate(`/student/${encodeURIComponent(student.name)}`);
                                             return;
@@ -1080,6 +1105,9 @@ const LandingPage = () => {
 
                                         const hashedInput = CryptoJS.SHA256(pin).toString();
                                         if (student.pin === hashedInput || student.pin === pin) {
+                                            if (pendingBooking) {
+                                                finalizeBooking('student', student);
+                                            }
                                             setShowStudentBookingModal(false);
                                             navigate(`/student/${encodeURIComponent(student.name)}`);
                                         } else {
@@ -1494,30 +1522,47 @@ const LandingPage = () => {
                                         createdAt: new Date().toISOString()
                                     };
 
-                                    // Create Student
-                                    const newStudent = {
-                                        id: Date.now() + 1,
-                                        name: studentName,
-                                        email: email, // Parent email as contact
-                                        parentEmail: email,
-                                        parentId: newParent.id,
-                                        isUnder16: true, // Assumed for parent booking
-                                        pin: CryptoJS.SHA256('0000').toString(), // Default PIN for student, parent manages
-                                        subject: subject,
-                                        sessionsCompleted: 0,
-                                        totalSpent: 0,
-                                        nextSession: null,
-                                        status: 'Active'
-                                    };
+                                    const existingStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
+                                    const existingStudent = existingStudents.find(s => s.name.toLowerCase() === studentName.toLowerCase());
 
-                                    newParent.linkedStudents.push(newStudent.id);
+                                    let targetStudent;
+                                    let isNewStudent = false;
+
+                                    if (existingStudent) {
+                                        // Link to existing student
+                                        targetStudent = {
+                                            ...existingStudent,
+                                            parentId: newParent.id,
+                                            parentEmail: email
+                                        };
+                                        // Update in the list
+                                        const studentIndex = existingStudents.findIndex(s => s.id === existingStudent.id);
+                                        existingStudents[studentIndex] = targetStudent;
+                                    } else {
+                                        // Create Student
+                                        isNewStudent = true;
+                                        targetStudent = {
+                                            id: Date.now() + 1,
+                                            name: studentName,
+                                            email: email, // Parent email as contact
+                                            parentEmail: email,
+                                            parentId: newParent.id,
+                                            isUnder16: true, // Assumed for parent booking
+                                            pin: CryptoJS.SHA256('0000').toString(), // Default PIN for student, parent manages
+                                            subject: subject,
+                                            sessionsCompleted: 0,
+                                            totalSpent: 0,
+                                            nextSession: null,
+                                            status: 'Active'
+                                        };
+                                        existingStudents.push(targetStudent);
+                                    }
+
+                                    newParent.linkedStudents.push(targetStudent.id);
 
                                     // Save
                                     existingParents.push(newParent);
                                     localStorage.setItem('tutor_parents', JSON.stringify(existingParents));
-
-                                    const existingStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
-                                    existingStudents.push(newStudent);
                                     localStorage.setItem('tutor_students', JSON.stringify(existingStudents));
 
                                     window.dispatchEvent(new Event('storage'));
@@ -1527,7 +1572,7 @@ const LandingPage = () => {
                                     setShowParentLoginModal(false);
 
                                     if (pendingBooking) {
-                                        finalizeBooking('parent', { ...newParent, name: studentName, id: newStudent.id, parentId: newParent.id });
+                                        finalizeBooking('parent', { ...newParent, name: targetStudent.name, id: targetStudent.id, parentId: newParent.id });
                                     }
 
                                     navigate(`/parent/${encodeURIComponent(email)}`);
@@ -1723,6 +1768,19 @@ const LandingPage = () => {
                                         const hashedInput = CryptoJS.SHA256(pin).toString();
 
                                         if (parentAccount.pin === hashedInput || parentAccount.pin === pin) {
+                                            if (pendingBooking) {
+                                                const allStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
+                                                // Try to find the child
+                                                const child = allStudents.find(s => parentAccount.linkedStudents?.includes(s.id));
+
+                                                if (child) {
+                                                    // Book for the child, pass the name explicitly to be safe
+                                                    finalizeBooking('student', { ...child, name: child.name, parentId: parentAccount.id });
+                                                } else {
+                                                    // Fallback to parent booking
+                                                    finalizeBooking('parent', { ...parentAccount, name: parentAccount.name || parentAccount.firstName });
+                                                }
+                                            }
                                             setShowParentLoginModal(false);
                                             setParentLoginStep('email');
                                             navigate(`/parent/${encodeURIComponent(parentEmail)}`);

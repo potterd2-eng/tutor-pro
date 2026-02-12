@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 
 export const useWhiteboard = (canvasRef, viewportRef, connection, sessionId) => {
     const [tool, setTool] = useState('pen');
@@ -54,62 +54,12 @@ export const useWhiteboard = (canvasRef, viewportRef, connection, sessionId) => 
         return () => window.removeEventListener('resize', updateRect);
     }, []);
 
-    // History Logic
-    const saveHistory = () => {
-        if (!canvasRef.current) return;
-        const data = canvasRef.current.toDataURL();
-        const newHistory = history.slice(0, historyStep + 1);
-        newHistory.push(data);
-        if (newHistory.length > 20) newHistory.shift();
-        setHistory(newHistory);
-        setHistoryStep(newHistory.length - 1);
-        savePage();
-    };
-
-    const undo = (broadcast = true) => {
-        if (historyStep > 0) {
-            const newStep = historyStep - 1;
-            setHistoryStep(newStep);
-            const img = new Image();
-            img.onload = () => {
-                const ctx = ctxRef.current;
-                ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-                ctx.drawImage(img, 0, 0);
-                savePage();
-            };
-            img.src = history[newStep];
-            if (broadcast && connection && connection.open) connection.send({ type: 'undo' });
-        }
-    };
-
-    const redo = (broadcast = true) => {
-        if (historyStep < history.length - 1) {
-            const newStep = historyStep + 1;
-            setHistoryStep(newStep);
-            const img = new Image();
-            img.onload = () => {
-                const ctx = ctxRef.current;
-                ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-                ctx.drawImage(img, 0, 0);
-                savePage();
-            };
-            img.src = history[newStep];
-            if (broadcast && connection && connection.open) connection.send({ type: 'redo' });
-        }
-    };
-
     // Page Logic
     // Use sessionId to scope keys. If no sessionId (e.g. older version), fallback or use 'default'
     const scope = sessionId || 'default';
     const getKey = (p) => `tutor_wb_${scope}_p${p}`;
 
-    const savePage = () => {
-        if (!canvasRef.current) return;
-        localStorage.setItem(getKey(page), canvasRef.current.toDataURL());
-        localStorage.setItem(`tutor_wb_${scope}_total`, totalPages);
-    };
-
-    const loadPage = (p) => {
+    const loadPage = React.useCallback((p) => {
         const ctx = ctxRef.current;
         if (!ctx || !canvasRef.current) return;
         ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
@@ -127,32 +77,86 @@ export const useWhiteboard = (canvasRef, viewportRef, connection, sessionId) => 
             setHistory([blank]);
             setHistoryStep(0);
         }
-    };
+    }, [sessionId]);
 
-    const changePage = (newPage, broadcast = true) => {
+    const savePage = React.useCallback(() => {
+        if (!canvasRef.current) return;
+        localStorage.setItem(getKey(page), canvasRef.current.toDataURL());
+        localStorage.setItem(`tutor_wb_${scope}_total`, totalPages);
+    }, [page, totalPages, sessionId]);
+
+    // History Logic
+    const saveHistory = React.useCallback(() => {
+        if (!canvasRef.current) return;
+        const data = canvasRef.current.toDataURL();
+        const newHistory = history.slice(0, historyStep + 1);
+        newHistory.push(data);
+        if (newHistory.length > 20) newHistory.shift();
+        setHistory(newHistory);
+        setHistoryStep(newHistory.length - 1);
+        savePage();
+    }, [history, historyStep, savePage]);
+
+    const undo = React.useCallback((broadcast = true) => {
+        if (historyStep > 0) {
+            const newStep = historyStep - 1;
+            setHistoryStep(newStep);
+            const img = new Image();
+            img.onload = () => {
+                const ctx = ctxRef.current;
+                if (ctx && canvasRef.current) {
+                    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+                    ctx.drawImage(img, 0, 0);
+                    savePage();
+                }
+            };
+            img.src = history[newStep];
+            if (broadcast && connection && connection.open) connection.send({ type: 'undo' });
+        }
+    }, [history, historyStep, savePage, connection]);
+
+    const redo = React.useCallback((broadcast = true) => {
+        if (historyStep < history.length - 1) {
+            const newStep = historyStep + 1;
+            setHistoryStep(newStep);
+            const img = new Image();
+            img.onload = () => {
+                const ctx = ctxRef.current;
+                if (ctx && canvasRef.current) {
+                    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+                    ctx.drawImage(img, 0, 0);
+                    savePage();
+                }
+            };
+            img.src = history[newStep];
+            if (broadcast && connection && connection.open) connection.send({ type: 'redo' });
+        }
+    }, [history, historyStep, savePage, connection]);
+
+    const changePage = React.useCallback((newPage, broadcast = true) => {
         savePage();
         setPage(newPage);
         loadPage(newPage);
         if (broadcast && connection && connection.open) {
             connection.send({ type: 'change_page', page: newPage });
         }
-    };
+    }, [savePage, loadPage, connection]);
 
-    const addPage = (broadcast = true) => {
+    const addPage = React.useCallback((broadcast = true) => {
         savePage();
         const newTotal = totalPages + 1;
         setTotalPages(newTotal);
         setPage(newTotal);
         loadPage(newTotal);
         if (broadcast && connection && connection.open) {
-            connection.send({ type: 'add_page' }); // Receiver should just increment total and go to it
+            connection.send({ type: 'add_page' });
         }
-    };
+    }, [savePage, loadPage, totalPages, connection]);
 
     const nextPage = () => changePage(Math.min(totalPages, page + 1));
     const prevPage = () => changePage(Math.max(1, page - 1));
 
-    const clearCanvas = (broadcast = true) => {
+    const clearCanvas = React.useCallback((broadcast = true) => {
         const ctx = ctxRef.current;
         if (ctx && canvasRef.current) {
             ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
@@ -161,7 +165,7 @@ export const useWhiteboard = (canvasRef, viewportRef, connection, sessionId) => 
                 connection.send({ type: 'clear_canvas' });
             }
         }
-    };
+    }, [saveHistory, connection]);
 
     // Restore Total Pages
     useEffect(() => {
@@ -368,9 +372,14 @@ export const useWhiteboard = (canvasRef, viewportRef, connection, sessionId) => 
     const zoomIn = () => setTransform(t => ({ ...t, scale: Math.min(5, t.scale * 1.2) }));
     const zoomOut = () => setTransform(t => ({ ...t, scale: Math.max(0.1, t.scale / 1.2) }));
 
+    // Stable reference for external drawing to avoid dependency cycles and re-registration
+    const handlersRef = useRef({ saveHistory, changePage, addPage, clearCanvas, undo, redo });
     useEffect(() => {
-        window.externalDraw = (data) => {
-            // Drawing logic
+        handlersRef.current = { saveHistory, changePage, addPage, clearCanvas, undo, redo };
+    }, [saveHistory, changePage, addPage, clearCanvas, undo, redo]);
+
+    useEffect(() => {
+        const handleExternalDraw = (data) => {
             const ctx = ctxRef.current;
             if (!ctx) return;
 
@@ -399,41 +408,44 @@ export const useWhiteboard = (canvasRef, viewportRef, connection, sessionId) => 
                 ctx.quadraticCurveTo(p1.x, p1.y, p2.x, p2.y);
                 ctx.stroke();
                 ctx.restore();
-
-                // IMPORTANT: Save history state for undo/redo sync
-                saveHistory();
             }
 
-            // Text Logic
             else if (data.type === 'draw_text') {
-                if (data.page !== undefined && data.page !== stateRef.current.page) return; // Only draw if on same page
+                if (data.page !== undefined && data.page !== stateRef.current.page) return;
                 ctx.save();
                 ctx.globalCompositeOperation = 'source-over';
                 ctx.fillStyle = data.color;
                 ctx.font = `bold ${data.size * 5}px sans-serif`;
                 ctx.fillText(data.text, data.x, data.y);
                 ctx.restore();
-                saveHistory();
+                handlersRef.current.saveHistory();
             }
 
-            // Sync Actions
             else if (data.type === 'change_page') {
-                changePage(data.page, false);
+                handlersRef.current.changePage(data.page, false);
             }
             else if (data.type === 'add_page') {
-                addPage(false);
+                handlersRef.current.addPage(false);
             }
             else if (data.type === 'clear_canvas') {
-                clearCanvas(false);
+                handlersRef.current.clearCanvas(false);
             }
             else if (data.type === 'undo') {
-                undo(false);
+                handlersRef.current.undo(false);
             }
             else if (data.type === 'redo') {
-                redo(false);
+                handlersRef.current.redo(false);
             }
         };
-    }, [page, totalPages, history, historyStep]); // Add dependencies needed for actions
+
+        window.externalDraw = handleExternalDraw;
+
+        return () => {
+            if (window.externalDraw === handleExternalDraw) {
+                window.externalDraw = null;
+            }
+        };
+    }, []);
 
     return {
         tool, setTool,
