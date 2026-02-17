@@ -1,7 +1,42 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, User, Video, Trash2, GraduationCap, ArrowRight, Settings, Check, X, Clock, AlertCircle, CheckCircle, ChevronLeft, ChevronRight, Shield, Calendar, MessageSquare, TrendingUp, Mail } from 'lucide-react';
+import { Plus, User, Video, Trash2, GraduationCap, ArrowRight, Settings, Check, X, Clock, AlertCircle, CheckCircle, ChevronLeft, ChevronRight, Shield, Calendar, MessageSquare, TrendingUp, Mail, FileText } from 'lucide-react';
 import { emailService } from '../utils/email';
+import dataService from '../services/dataService';
+import MigrateData from './MigrateData';
+
+const NOTES_KEY = 'tutor_teacher_notes';
+
+function TeacherPrivateNotesInput({ bookingId, initialValue }) {
+    const [value, setValue] = useState(initialValue);
+    const debounceRef = useRef(null);
+    const save = (v) => {
+        try {
+            const raw = localStorage.getItem(NOTES_KEY);
+            const o = raw ? JSON.parse(raw) : {};
+            if (v) o[bookingId] = v; else delete o[bookingId];
+            localStorage.setItem(NOTES_KEY, JSON.stringify(o));
+        } catch (_) {}
+    };
+    useEffect(() => setValue(initialValue), [bookingId, initialValue]);
+    return (
+        <>
+            <textarea
+                className="w-full text-gray-600 bg-purple-50 rounded-lg px-2 py-1.5 mt-0.5 border border-purple-100 min-h-[3rem] text-xs resize-y focus:border-purple-400 outline-none"
+                placeholder="Private notes — only you see these"
+                value={value}
+                onBlur={() => save(value.trim())}
+                onChange={(e) => {
+                    const v = e.target.value;
+                    setValue(v);
+                    if (debounceRef.current) clearTimeout(debounceRef.current);
+                    debounceRef.current = setTimeout(() => save(v.trim()), 400);
+                }}
+            />
+            <p className="text-[10px] text-purple-400 mt-0.5 italic">Saves automatically</p>
+        </>
+    );
+}
 
 const TeacherDashboard = () => {
     const navigate = useNavigate();
@@ -20,32 +55,47 @@ const TeacherDashboard = () => {
     const [activeChatStudent, setActiveChatStudent] = useState(null);
     const [parents, setParents] = useState([]);
     const [activeChatParent, setActiveChatParent] = useState(null);
+    const [sessionNotesStudent, setSessionNotesStudent] = useState(null);
+    const [pendingFeedback, setPendingFeedback] = useState([]);
+    const [completeNotesFor, setCompleteNotesFor] = useState(null);
+    const [completeNotesTopic, setCompleteNotesTopic] = useState('');
+    const [completeNotesWell, setCompleteNotesWell] = useState('');
+    const [completeNotesImprove, setCompleteNotesImprove] = useState('');
+    const [completeNotesFocus, setCompleteNotesFocus] = useState('');
+    const [completeNotesNextSteps, setCompleteNotesNextSteps] = useState('');
 
     // Unified Schedule State (Used for both Consultations and Lessons)
     const [weeklySchedule, setWeeklySchedule] = useState(() => {
-        const saved = localStorage.getItem('tutor_weekly_schedule');
         const defaultSchedule = [
-            { day: 'Monday', intervals: [{ start: '09:00', end: '15:00' }, { start: '18:45', end: '20:00' }], active: true },
-            { day: 'Tuesday', intervals: [{ start: '18:00', end: '20:00' }], active: true },
-            { day: 'Wednesday', intervals: [{ start: '13:00', end: '16:00' }], active: true },
-            { day: 'Thursday', intervals: [{ start: '09:00', end: '16:00' }, { start: '19:00', end: '20:00' }], active: true },
-            { day: 'Friday', intervals: [{ start: '09:00', end: '12:00' }, { start: '18:00', end: '20:00' }], active: true },
+            { day: 'Monday', intervals: [{ start: '09:00', end: '17:00' }], active: true },
+            { day: 'Tuesday', intervals: [{ start: '09:00', end: '17:00' }], active: true },
+            { day: 'Wednesday', intervals: [{ start: '09:00', end: '17:00' }], active: true },
+            { day: 'Thursday', intervals: [{ start: '09:00', end: '17:00' }], active: true },
+            { day: 'Friday', intervals: [{ start: '09:00', end: '15:00' }], active: true },
             { day: 'Saturday', intervals: [{ start: '09:00', end: '18:00' }], active: true },
             { day: 'Sunday', intervals: [{ start: '09:00', end: '18:00' }], active: true },
         ];
 
+        const saved = localStorage.getItem('tutor_weekly_schedule');
         if (saved) {
             try {
                 const parsed = JSON.parse(saved);
-                // Migrate legacy format (start/end) to new format (intervals)
-                return parsed.map(day => {
-                    if (!day.intervals) {
-                        return {
-                            ...day,
-                            intervals: (day.start && day.end) ? [{ start: day.start, end: day.end }] : []
-                        };
+                const daysOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+                // Ensure we return exactly the 7 days in the correct order
+                return daysOrder.map(dayName => {
+                    const existingDay = parsed.find(d => d.day === dayName);
+                    if (existingDay) {
+                        // Migrate legacy format if needed
+                        if (!existingDay.intervals) {
+                            existingDay.intervals = (existingDay.start && existingDay.end)
+                                ? [{ start: existingDay.start, end: existingDay.end }]
+                                : [];
+                        }
+                        return existingDay;
                     }
-                    return day;
+                    // Fallback to default if a day is missing from saved data
+                    return defaultSchedule.find(d => d.day === dayName);
                 });
             } catch (e) {
                 console.error("Failed to parse schedule", e);
@@ -76,7 +126,7 @@ const TeacherDashboard = () => {
 
     // Individual Booking State
     const [showIndividualBookingModal, setShowIndividualBookingModal] = useState(false);
-    const [individualBookingConfig, setIndividualBookingConfig] = useState({ studentId: '', date: '', time: '', subject: 'Maths GCSE' });
+    const [individualBookingConfig, setIndividualBookingConfig] = useState({ studentId: '', date: '', time: '14:00', subject: 'Maths GCSE' });
 
     // Reschedule Confirmation State
     const [rescheduleConfirm, setRescheduleConfirm] = useState(null); // { booking, action: 'approve' | 'deny' }
@@ -99,10 +149,21 @@ const TeacherDashboard = () => {
             .join(' ');
     };
 
+    // The 4 lesson types you offer (prices flow to student/parent dash)
+    const LESSON_TYPE_OPTIONS = ['Maths KS3', 'Maths GCSE', 'Sociology GCSE', 'Sociology A-Level'];
+    const getRateFromSubject = (subject) => {
+        if (!subject) return 30;
+        const s = String(subject).toLowerCase();
+        if (s.includes('ks3')) return 25;
+        if (s.includes('a-level') || s.includes('alevel') || s.includes('a level') || s.includes('a-lvl')) return 40;
+        return 30;
+    };
+
     const generateTimeOptions = () => {
         const options = [];
-        for (let h = 0; h < 24; h++) {
+        for (let h = 7; h <= 22; h++) {
             for (let m = 0; m < 60; m += 15) {
+                if (h === 22 && m > 0) break;
                 const hour = h.toString().padStart(2, '0');
                 const min = m.toString().padStart(2, '0');
                 const time = `${hour}:${min}`;
@@ -121,6 +182,10 @@ const TeacherDashboard = () => {
 
     // Cancellation Confirmation State
     const [cancelConfirm, setCancelConfirm] = useState(null); // { booking, mode: 'single' | 'series' | null }
+    const [upcomingMonthFilter, setUpcomingMonthFilter] = useState(() => {
+        const n = new Date();
+        return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
+    });
 
     const handleCancelClick = (booking) => {
         setCancelConfirm({ booking, mode: null });
@@ -211,46 +276,104 @@ const TeacherDashboard = () => {
         setDeleteConfirm(null);
     };
 
+    const submitCompleteNotes = (e) => {
+        e.preventDefault();
+        if (!completeNotesFor) return;
+        const consolidated = `${completeNotesWell} ${completeNotesImprove ? '| To Improve: ' + completeNotesImprove : ''} ${completeNotesFocus ? '| Focus: ' + completeNotesFocus : ''}`.trim();
+        const sessionLog = {
+            id: completeNotesFor.roomId || Date.now().toString(),
+            date: completeNotesFor.date || new Date().toISOString(),
+            endTime: completeNotesFor.date || new Date().toISOString(),
+            studentName: completeNotesFor.studentName,
+            studentId: (completeNotesFor.studentName || '').toLowerCase().replace(/\s+/g, '_'),
+            subject: completeNotesTopic,
+            topic: completeNotesTopic,
+            feedback: consolidated,
+            feedback_well: completeNotesWell,
+            feedback_improve: completeNotesImprove,
+            feedback_focus: completeNotesFocus,
+            next_steps: completeNotesNextSteps,
+            nextSteps: completeNotesNextSteps,
+            cost: getRateFromSubject(completeNotesTopic),
+            paymentStatus: 'Due',
+            type: 'lesson',
+            duration: '60',
+        };
+        const history = JSON.parse(localStorage.getItem('tutor_session_history')) || [];
+        history.push(sessionLog);
+        localStorage.setItem('tutor_session_history', JSON.stringify(history));
+        setSessionHistory(history);
+        const nextPending = pendingFeedback.filter(p => p.roomId !== completeNotesFor.roomId || p.date !== completeNotesFor.date);
+        setPendingFeedback(nextPending);
+        localStorage.setItem('tutor_pending_feedback', JSON.stringify(nextPending));
+        setCompleteNotesFor(null);
+        setCompleteNotesTopic('');
+        setCompleteNotesWell('');
+        setCompleteNotesImprove('');
+        setCompleteNotesFocus('');
+        setCompleteNotesNextSteps('');
+        window.dispatchEvent(new Event('storage'));
+    };
+
     useEffect(() => {
-        const storedStudents = localStorage.getItem('tutor_students');
-        if (storedStudents) setStudents(JSON.parse(storedStudents));
+        const loadDashboardData = async () => {
+            // 1. Load Critical Data from Service (Backend or Local)
+            const loadedStudents = await dataService.getStudents();
+            setStudents(loadedStudents);
 
-        const storedParents = localStorage.getItem('tutor_parents');
-        if (storedParents) setParents(JSON.parse(storedParents));
+            const loadedBookings = await dataService.getBookings();
+            loadedBookings.sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+            setBookings(loadedBookings);
 
-        // Load chat messages (per-student threads)
-        const messages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
-        setChatMessages(messages);
+            const loadedHistory = await dataService.getSessionHistory();
+            setSessionHistory(loadedHistory);
 
-        const loadSlots = () => {
-            const s = JSON.parse(localStorage.getItem('tutor_slots')) || [];
-            const l = JSON.parse(localStorage.getItem('tutor_lesson_slots')) || [];
-            setSlots(s);
-            setLessonSlots(l);
+            // Prefer localStorage for schedule so Sat/Sun toggle (and other edits) aren't overwritten by stale DB
+            const savedSchedule = localStorage.getItem('tutor_weekly_schedule');
+            if (savedSchedule) {
+                try {
+                    const parsed = JSON.parse(savedSchedule);
+                    const daysOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+                    const normalized = daysOrder.map(dayName => {
+                        const found = parsed.find(d => d.day === dayName);
+                        const def = { day: dayName, intervals: [{ start: '09:00', end: dayName === 'Friday' ? '15:00' : '17:00' }], active: true };
+                        if (dayName === 'Saturday' || dayName === 'Sunday') def.intervals = [{ start: '09:00', end: '18:00' }];
+                        return found ? { ...def, ...found, day: dayName } : def;
+                    });
+                    setWeeklySchedule(normalized);
+                } catch (_) {
+                    const loadedSchedule = await dataService.getWeeklySchedule();
+                    setWeeklySchedule(loadedSchedule);
+                }
+            } else {
+                const loadedSchedule = await dataService.getWeeklySchedule();
+                setWeeklySchedule(loadedSchedule);
+            }
+
+            // 2. Load Local-Only / Less Critical Data
+            // (Ideally these move to backend too, but keeping scope focused)
+            const storedParents = JSON.parse(localStorage.getItem('tutor_parents')) || [];
+            setParents(storedParents);
+
+            const storedSlots = JSON.parse(localStorage.getItem('tutor_slots')) || [];
+            const storedLessonSlots = JSON.parse(localStorage.getItem('tutor_lesson_slots')) || [];
+            setSlots(storedSlots);
+            setLessonSlots(storedLessonSlots);
+
+            const messages = JSON.parse(localStorage.getItem('chat_messages_v2')) || {};
+            setChatMessages(messages);
+
+            const pending = JSON.parse(localStorage.getItem('tutor_pending_feedback') || '[]');
+            setPendingFeedback(pending);
         };
-        loadSlots();
-        window.addEventListener('storage', loadSlots);
 
-        const loadHistory = () => {
-            const h = JSON.parse(localStorage.getItem('tutor_session_history')) || [];
-            setSessionHistory(h);
-        };
-        const loadBookings = () => {
-            const b = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
-            // Sort by date/time
-            b.sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
-            setBookings(b);
-        };
-        loadHistory();
-        loadBookings();
-        window.addEventListener('storage', loadHistory);
-        window.addEventListener('storage', loadBookings);
+        loadDashboardData();
 
-        return () => {
-            window.removeEventListener('storage', loadSlots);
-            window.removeEventListener('storage', loadHistory);
-            window.removeEventListener('storage', loadBookings);
-        };
+        // Listen for storage events to update UI if changed elsewhere locally
+        // (Note: Backend changes won't trigger 'storage' event across devices, 
+        //  but dataService keeps local flush so this works for same-device tabs)
+        window.addEventListener('storage', loadDashboardData);
+        return () => window.removeEventListener('storage', loadDashboardData);
     }, []);
 
     // Mark messages as read when a chat is active
@@ -284,13 +407,12 @@ const TeacherDashboard = () => {
 
     const paidEarnings = sessionHistory
         .filter(s => s.paymentStatus && s.paymentStatus.toLowerCase() === 'paid')
-        .reduce((sum, s) => sum + (s.cost !== undefined ? Number(s.cost) : 30), 0);
+        .reduce((sum, s) => sum + (s.cost !== undefined ? Number(s.cost) : (s.type === 'consultation' ? 0 : getRateFromSubject(s.subject || s.topic))), 0);
 
     // Outstanding = Completed lessons that are NOT marked as 'Paid'
-    // This is work already done but money not yet received.
     const completedUnpaid = sessionHistory
         .filter(s => (!s.paymentStatus || s.paymentStatus.toLowerCase() !== 'paid'))
-        .reduce((sum, s) => sum + (s.cost !== undefined ? Number(s.cost) : (s.type === 'consultation' ? 0 : 30)), 0);
+        .reduce((sum, s) => sum + (s.cost !== undefined ? Number(s.cost) : (s.type === 'consultation' ? 0 : getRateFromSubject(s.subject || s.topic))), 0);
 
     // Upcoming = Bookings in the future
     const futureBookings = bookings.filter(b =>
@@ -299,7 +421,10 @@ const TeacherDashboard = () => {
         b.subject !== 'Free Consultation' &&
         b.status !== 'cancelled'
     );
-    const futureEarnings = futureBookings.reduce((sum, b) => sum + (b.cost !== undefined ? Number(b.cost) : 30), 0);
+    const futureEarnings = futureBookings.reduce((sum, b) => {
+        if (b.paymentStatus === 'In bundle') return sum;
+        return sum + (b.cost !== undefined ? Number(b.cost) : getRateFromSubject(b.subject));
+    }, 0);
 
     // Real Outstanding = Completed Unpaid (Past)
     // Projected = Past Unpaid + Future Booked
@@ -322,7 +447,10 @@ const TeacherDashboard = () => {
 
         const bookedLessons = monthItems.filter(i => i.type === 'lesson').length;
         const consultations = monthItems.filter(i => i.type === 'consultation').length;
-        const projectedEarnings = monthItems.reduce((sum, item) => sum + (item.cost !== undefined ? Number(item.cost) : (item.type === 'consultation' ? 0 : 30)), 0);
+        const projectedEarnings = monthItems.reduce((sum, item) => {
+            if (item.type === 'consultation' || item.cost === 0) return sum;
+            return sum + (item.cost !== undefined ? Number(item.cost) : getRateFromSubject(item.subject || item.topic));
+        }, 0);
 
         return {
             monthName,
@@ -339,7 +467,7 @@ const TeacherDashboard = () => {
                 lDate.getMonth() === currentMonth &&
                 lDate.getFullYear() === currentYear;
         })
-        .reduce((sum, s) => sum + (s.cost !== undefined ? Number(s.cost) : 30), 0);
+        .reduce((sum, s) => sum + (s.cost !== undefined ? Number(s.cost) : (s.type === 'consultation' ? 0 : getRateFromSubject(s.subject || s.topic))), 0);
 
     const projectedThisMonth = monthlyProjections[0].projectedEarnings;
     const lessonsThisMonth = monthlyProjections[0].bookedLessons;
@@ -350,8 +478,7 @@ const TeacherDashboard = () => {
 
     // Save Unified Schedule
     useEffect(() => {
-        localStorage.setItem('tutor_weekly_schedule', JSON.stringify(weeklySchedule));
-        window.dispatchEvent(new Event('storage'));
+        dataService.saveWeeklySchedule(weeklySchedule);
     }, [weeklySchedule]);
 
     const saveStudents = (list) => {
@@ -359,18 +486,37 @@ const TeacherDashboard = () => {
         localStorage.setItem('tutor_students', JSON.stringify(list));
     };
 
-    const addStudent = (e) => {
+    const addStudent = async (e) => {
         e.preventDefault();
         if (!newStudentName.trim()) return;
-        const newStudent = { id: Date.now().toString(), name: formatName(newStudentName) };
-        const updated = [...students, newStudent];
-        saveStudents(updated);
-        setNewStudentName('');
+
+        const newName = formatName(newStudentName);
+        const newStudent = { name: newName }; // dataService will handle ID and backend
+
+        try {
+            const result = await dataService.createStudent(newStudent);
+            // Result will be the new student (either from backend or local storage)
+            const updated = [...students, result];
+            setStudents(updated);
+            setNewStudentName('');
+            setNotification({ type: 'success', message: `${result.name} added to roster.` });
+        } catch (err) {
+            console.error("Failed to add student:", err);
+            setNotification({ type: 'error', message: 'Failed to add student. Please try again.' });
+        }
     };
 
-    const removeStudent = (id) => {
-        const updated = students.filter(s => s.id !== id);
-        saveStudents(updated);
+    const removeStudent = async (id) => {
+        if (!window.confirm("Are you sure you want to remove this student? All their local data will remain in bookings but they will be removed from your list.")) return;
+
+        try {
+            await dataService.deleteStudent(id);
+            const updated = students.filter(s => s.id !== id);
+            setStudents(updated);
+        } catch (err) {
+            console.error("Failed to remove student:", err);
+            setNotification({ type: 'error', message: 'Failed to remove student.' });
+        }
     };
 
     const startLesson = (student) => {
@@ -564,7 +710,7 @@ const TeacherDashboard = () => {
                     seriesIndex: i + 1,
                     totalSeries: weeks,
                     cost: (weeks === 10) ? (i === 0 ? 280 : 0) : 30,
-                    paymentStatus: 'Due'
+                    paymentStatus: (weeks === 10) ? (i === 0 ? 'Due' : 'In bundle') : 'Due'
                 });
 
                 if (existingSlot) {
@@ -615,7 +761,7 @@ const TeacherDashboard = () => {
     };
 
     // Individual Booking Logic
-    const handleIndividualBooking = (e) => {
+    const handleIndividualBooking = async (e) => {
         e.preventDefault();
         const { studentId, date, time, subject } = individualBookingConfig;
         if (!studentId || !date || !time || !subject) {
@@ -623,41 +769,45 @@ const TeacherDashboard = () => {
             return;
         }
 
-        const student = students.find(s => s.id == studentId);
+        const student = students.find(s => String(s.id) === String(studentId));
         if (!student) {
             setNotification({ type: 'error', message: "Student not found." });
             return;
         }
 
-        // Check if slot is already booked
-        const existingBooking = bookings.find(b => b.date === date && b.time === time && b.status !== 'cancelled');
+        const dateStr = date.includes('T') ? date.split('T')[0] : date;
+        const existingBooking = bookings.find(b => b.date === dateStr && b.time === time && b.status !== 'cancelled');
         if (existingBooking) {
             setNotification({ type: 'error', message: `Conflict: This time slot is already booked for ${existingBooking.student}.` });
             return;
         }
 
-        // Create single booking
         const newBooking = {
-            id: `bk-${date}-${time}-${Date.now()}`,
+            id: `bk-${dateStr}-${time}-${Date.now()}`,
             student: student.name,
             studentId: student.id,
-            date: date,
+            date: dateStr,
             time: time,
             subject: subject,
             type: 'lesson',
             status: 'confirmed',
-            recurringId: null, // Individual lesson
+            recurringId: null,
             cost: 30,
             paymentStatus: 'Due'
         };
 
+        try {
+            await dataService.createBooking(newBooking);
+        } catch (_) {
+            const updatedBookings = [...bookings, newBooking];
+            localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+            window.dispatchEvent(new Event('storage'));
+        }
+
         const updatedBookings = [...bookings, newBooking];
-
-        // Mark slot as booked in lessonSlots
         const updatedLessonSlots = lessonSlots.map(s =>
-            (s.date === date && s.time === time) ? { ...s, bookedBy: student.name } : s
+            (s.date === dateStr && s.time === time) ? { ...s, bookedBy: student.name } : s
         );
-
         setBookings(updatedBookings);
         setLessonSlots(updatedLessonSlots);
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
@@ -665,7 +815,8 @@ const TeacherDashboard = () => {
         window.dispatchEvent(new Event('storage'));
 
         setShowIndividualBookingModal(false);
-        setIndividualBookingConfig({ studentId: '', date: '', time: '', subject: 'Maths GCSE' });
+        setIndividualBookingConfig({ studentId: '', date: '', time: '14:00', subject: 'Maths GCSE' });
+        setNotification({ type: 'success', message: `Lesson booked for ${student.name} on ${new Date(dateStr).toLocaleDateString('en-GB')} at ${formatTime(time)}.` });
     };
 
     // Teacher Reschedule Logic
@@ -974,28 +1125,28 @@ const TeacherDashboard = () => {
                 </div>
 
                 {/* Tabs */}
-                <div className="flex gap-4 border-b border-gray-200">
+                <div className="flex gap-4 border-b border-gray-200 overflow-x-auto scrollbar-none">
                     <button
                         onClick={() => setActiveTab('students')}
-                        className={`pb-4 px-4 font-bold text-lg transition-colors border-b-2 ${activeTab === 'students' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`pb-4 px-4 font-bold text-lg transition-colors border-b-2 whitespace-nowrap ${activeTab === 'students' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                     >
                         Students
                     </button>
                     <button
                         onClick={() => setActiveTab('slots')}
-                        className={`pb-4 px-4 font-bold text-lg transition-colors border-b-2 ${activeTab === 'slots' ? 'text-teal-600 border-teal-500' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`pb-4 px-4 font-bold text-lg transition-colors border-b-2 whitespace-nowrap ${activeTab === 'slots' ? 'text-teal-600 border-teal-500' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                     >
                         Availability
                     </button>
                     <button
                         onClick={() => setActiveTab('earnings')}
-                        className={`pb-4 px-4 font-bold text-lg transition-colors border-b-2 ${activeTab === 'earnings' ? 'text-green-600 border-green-500' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`pb-4 px-4 font-bold text-lg transition-colors border-b-2 whitespace-nowrap ${activeTab === 'earnings' ? 'text-green-600 border-green-500' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                     >
                         Earnings
                     </button>
                     <button
                         onClick={() => setActiveTab('messages')}
-                        className={`pb-4 px-4 font-bold text-lg transition-colors border-b-2 relative ${activeTab === 'messages' ? 'text-blue-600 border-blue-500' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`pb-4 px-4 font-bold text-lg transition-colors border-b-2 relative whitespace-nowrap overflow-visible ${activeTab === 'messages' ? 'text-blue-600 border-blue-500' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                     >
                         Messages
                         {(() => {
@@ -1003,13 +1154,51 @@ const TeacherDashboard = () => {
                                 return total + (msgs || []).filter(m => m.sender !== 'Davina' && !m.read).length;
                             }, 0);
                             return totalUnread > 0 ? (
-                                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                                <span className="absolute -top-0.5 -right-0.5 min-w-[1.25rem] h-5 px-1 flex items-center justify-center bg-red-500 text-white text-xs font-bold rounded-full shrink-0 overflow-visible">
                                     {totalUnread > 9 ? '9+' : totalUnread}
                                 </span>
                             ) : null;
                         })()}
                     </button>
+                    <button
+                        onClick={() => setActiveTab('settings')}
+                        className={`pb-4 px-4 font-bold text-lg transition-colors border-b-2 ${activeTab === 'settings' ? 'text-gray-900 border-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                    >
+                        Settings
+                    </button>
                 </div>
+
+                {/* Lessons needing summary (complete end-of-lesson notes later) */}
+                {pendingFeedback.length > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
+                        <div className="flex items-center gap-2">
+                            <FileText className="text-amber-600 shrink-0" size={22} />
+                            <span className="font-bold text-amber-800">Lessons needing summary</span>
+                            <span className="text-amber-700 text-sm">Complete the 4 end-of-lesson questions for these sessions.</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {pendingFeedback.map((item, idx) => (
+                                <div key={idx} className="flex items-center gap-2 bg-white rounded-xl px-3 py-2 border border-amber-200">
+                                    <span className="text-sm text-gray-700">{item.studentName || item.roomId} — {item.date ? new Date(item.date).toLocaleDateString('en-GB') : ''}</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setCompleteNotesFor(item);
+                                            setCompleteNotesTopic('');
+                                            setCompleteNotesWell('');
+                                            setCompleteNotesImprove('');
+                                            setCompleteNotesFocus('');
+                                            setCompleteNotesNextSteps('');
+                                        }}
+                                        className="py-1.5 px-3 bg-purple-600 text-white rounded-lg text-sm font-bold hover:bg-purple-700"
+                                    >
+                                        Complete notes
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Content */}
                 {activeTab === 'students' ? (
@@ -1020,9 +1209,21 @@ const TeacherDashboard = () => {
                                 <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
                                     <Plus size={20} className="text-purple-600" /> Add Student
                                 </h2>
-                                <form onSubmit={addStudent}>
-                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Student Name</label>
-                                    <input type="text" value={newStudentName} onChange={(e) => setNewStudentName(e.target.value)} placeholder="e.g. Alice" className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-purple-600 focus:outline-none mb-4" />
+                                <form onSubmit={addStudent} autoComplete="off">
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1" htmlFor="add-student-name">Student Name</label>
+                                    <input
+                                        id="add-student-name"
+                                        name="studentName"
+                                        type="text"
+                                        autoComplete="off"
+                                        value={newStudentName}
+                                        onChange={(e) => setNewStudentName(e.target.value)}
+                                        placeholder="e.g. Alice"
+                                        className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-purple-600 focus:outline-none mb-4"
+                                    />
+                                    {notification?.type === 'error' && notification?.message?.toLowerCase().includes('student') && (
+                                        <p className="text-red-600 text-sm font-semibold mb-3">{notification.message}</p>
+                                    )}
                                     <button type="submit" disabled={!newStudentName.trim()} className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                                         <Plus size={18} /> Add to Roster
                                     </button>
@@ -1046,6 +1247,23 @@ const TeacherDashboard = () => {
                                     <div className="grid gap-3">
                                         {students.map(student => {
                                             const parent = (JSON.parse(localStorage.getItem('tutor_parents')) || []).find(p => p.linkedStudents.includes(student.id));
+                                            const studentBookings = bookings.filter(b => (b.studentId === student.id || b.student === student.name || b.studentName === student.name) && b.status !== 'cancelled');
+                                            const hasPack = studentBookings.some(b => [230, 280, 370].includes(Number(b.cost)));
+                                            const byRecurring = {};
+                                            studentBookings.forEach(b => {
+                                                if (b.recurringId) {
+                                                    if (!byRecurring[b.recurringId]) byRecurring[b.recurringId] = [];
+                                                    byRecurring[b.recurringId].push(b);
+                                                }
+                                            });
+                                            const packCount = Object.values(byRecurring).filter(arr => arr.length === 10).length;
+                                            const completedForStudent = sessionHistory.filter(s => (s.studentName === student.name || s.student === student.name) && (s.paymentStatus === 'Paid' || s.paymentStatus === 'paid'));
+                                            const packUsed = Math.min(10, completedForStudent.length);
+                                            const packRemaining = hasPack ? Math.max(0, 10 - packUsed) : null;
+                                            const displaySubject = (() => {
+                                                const s = student.subject || studentBookings[0]?.subject || studentBookings[0]?.topic;
+                                                return s && s !== 'Maths A-Level' ? s : null;
+                                            })();
                                             return (
                                                 <div key={student.id} className="group bg-white p-5 rounded-2xl shadow-sm border border-gray-100 hover:border-purple-200 transition-all flex items-center justify-between">
                                                     <div className="flex items-center gap-4">
@@ -1053,8 +1271,11 @@ const TeacherDashboard = () => {
                                                             {student.name?.charAt(0).toUpperCase() || '?'}
                                                         </div>
                                                         <div>
-                                                            <h3 className="font-bold text-gray-800 text-lg flex items-center gap-2">
+                                                            <h3 className="font-bold text-gray-800 text-lg flex items-center gap-2 flex-wrap">
                                                                 {student.name}
+                                                                {displaySubject && (
+                                                                    <span className="text-[10px] font-bold text-purple-600 bg-purple-50 px-2 py-0.5 rounded border border-purple-100">{displaySubject}</span>
+                                                                )}
                                                                 {!sessionHistory.some(s => (s.studentName === student.name || s.student === student.name) && s.paymentStatus === 'Paid') && (
                                                                     <span className="text-[10px] bg-green-100 text-green-700 font-black px-1.5 py-0.5 rounded animate-pulse">NEW</span>
                                                                 )}
@@ -1069,9 +1290,15 @@ const TeacherDashboard = () => {
                                                             ) : (
                                                                 <p className="text-xs text-gray-400 italic mt-1">No parent linked</p>
                                                             )}
+                                                            {packRemaining !== null && (
+                                                                <p className="text-xs text-teal-600 font-bold mt-1">{packRemaining} of 10 remaining{packCount > 1 ? ` ×${packCount}` : ''}</p>
+                                                            )}
                                                         </div>
                                                     </div>
                                                     <div className="flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <button onClick={() => setSessionNotesStudent(student)} className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg transition-colors" title="Session notes">
+                                                            <FileText size={20} />
+                                                        </button>
                                                         <button onClick={() => {
                                                             setActiveTab('messages');
                                                             setMessageType('student');
@@ -1102,15 +1329,40 @@ const TeacherDashboard = () => {
 
                         {/* Upcoming Sessions Section */}
                         <div className="animate-in fade-in slide-in-from-bottom-8 duration-700">
-                            <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-                                <Clock size={20} className="text-purple-600" /> Upcoming Sessions
-                            </h2>
+                            <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+                                <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                                    <Clock size={20} className="text-purple-600" /> Upcoming Sessions
+                                </h2>
+                                {(() => {
+                                    const now = new Date();
+                                    const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                                    const upcomingList = bookings.filter(b => new Date(b.date + 'T' + b.time) > new Date() && b.status !== 'cancelled');
+                                    const dataMonths = [...new Set(upcomingList.map(b => { const d = new Date(b.date); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }))];
+                                    const sixMonthKeys = Array.from({ length: 6 }, (_, i) => { const d = new Date(now.getFullYear(), now.getMonth() + i, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
+                                    const months = [...new Set([...sixMonthKeys, ...dataMonths])].sort();
+                                    return (
+                                        <select value={upcomingMonthFilter} onChange={(e) => setUpcomingMonthFilter(e.target.value)} className="rounded-xl border-2 border-purple-100 px-4 py-2 font-bold text-sm text-gray-800 bg-white focus:border-purple-500">
+                                            {months.map(monthKey => {
+                                                const [yr, mo] = monthKey.split('-').map(Number);
+                                                return <option key={monthKey} value={monthKey}>{new Date(yr, mo - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}</option>;
+                                            })}
+                                        </select>
+                                    );
+                                })()}
+                            </div>
                             <div className="bg-white rounded-2xl shadow-lg border border-purple-100 overflow-hidden">
-                                {bookings.filter(b => new Date(b.date + 'T' + b.time) > new Date() && b.status !== 'cancelled').length === 0 ? (
-                                    <div className="p-12 text-center text-gray-400 italic">No upcoming sessions booked.</div>
+                                {(() => {
+                                    const [y, m] = (upcomingMonthFilter || '').split('-').map(Number);
+                                    const filteredUpcoming = bookings.filter(b => {
+                                        if (new Date(b.date + 'T' + b.time) <= new Date() || b.status === 'cancelled') return false;
+                                        const d = new Date(b.date);
+                                        return d.getFullYear() === y && d.getMonth() + 1 === m;
+                                    });
+                                    return filteredUpcoming.length === 0 ? (
+                                    <div className="p-12 text-center text-gray-400 italic">No upcoming sessions for this month.</div>
                                 ) : (
                                     <div className="divide-y divide-gray-100">
-                                        {bookings.filter(b => new Date(b.date + 'T' + b.time) > new Date() && b.status !== 'cancelled').map((booking, i) => (
+                                        {filteredUpcoming.map((booking, i) => (
                                             <div key={i} className={`p-4 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4 ${booking.status === 'pending_reschedule' ? 'bg-orange-50 hover:bg-orange-100 border-l-4 border-orange-400' : 'hover:bg-purple-50'}`}>
                                                 <div className="flex items-center gap-4">
                                                     <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center font-bold text-white shadow-sm ${booking.status === 'pending_reschedule' ? 'bg-orange-400' : (booking.type === 'consultation' ? 'bg-orange-400' : 'bg-purple-600')}`}>
@@ -1135,23 +1387,48 @@ const TeacherDashboard = () => {
                                                                 <div className="text-orange-700 font-bold">Requested: {new Date(booking.requestedDate).toLocaleDateString('en-GB')} at {formatTime(booking.requestedTime)}</div>
                                                             </div>
                                                         ) : (
-                                                            <div className="flex items-center gap-2">
-                                                                <p className="text-sm text-gray-500 flex items-center gap-2">
-                                                                    <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${booking.type === 'consultation' ? 'bg-orange-100 text-orange-600' : 'bg-purple-100 text-purple-600'}`}>
-                                                                        {booking.type === 'consultation' ? 'FREE MEETING' : (booking.subject || 'Lesson')}
-                                                                    </span>
-                                                                    {new Date(booking.date).toLocaleDateString('en-GB')} at {formatTime(booking.time)}
-                                                                </p>
-                                                                {booking.type !== 'consultation' && (
-                                                                    <div className="flex items-center" title={booking.paymentStatus?.toLowerCase() === 'paid' ? 'Paid' : 'Payment Due'}>
-                                                                        {booking.paymentStatus?.toLowerCase() === 'paid' ? (
-                                                                            <CheckCircle size={16} className="text-green-500" />
-                                                                        ) : (
-                                                                            <AlertCircle size={16} className="text-orange-500" />
-                                                                        )}
+                                                            <>
+                                                                <div className="mt-1 text-xs">
+                                                                    <span className="font-black text-gray-400 uppercase tracking-widest">Lesson type</span>
+                                                                </div>
+                                                                <div className="flex items-center gap-2 mt-1">
+                                                                    <p className="text-sm text-gray-500 flex items-center gap-2">
+                                                                        <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${booking.type === 'consultation' ? 'bg-orange-100 text-orange-600' : 'bg-purple-100 text-purple-600'}`}>
+                                                                            {booking.type === 'consultation' ? 'FREE MEETING' : (booking.subject || booking.topic || 'Lesson').toUpperCase()}
+                                                                        </span>
+                                                                        {new Date(booking.date).toLocaleDateString('en-GB')} at {formatTime(booking.time)}
+                                                                    </p>
+                                                                    {booking.type !== 'consultation' && (
+                                                                        <div className="flex items-center" title={booking.paymentStatus?.toLowerCase() === 'paid' ? 'Paid' : 'Payment Due'}>
+                                                                            {booking.paymentStatus?.toLowerCase() === 'paid' ? (
+                                                                                <CheckCircle size={16} className="text-green-500" />
+                                                                            ) : (
+                                                                                <AlertCircle size={16} className="text-orange-500" />
+                                                                            )}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                <div className="mt-1 text-xs">
+                                                                        <span className="font-black text-gray-400 uppercase tracking-widest">Notes for teacher</span>
+                                                                        <div className="text-gray-600 bg-gray-50 rounded-lg px-2 py-1.5 mt-0.5 border border-gray-100 min-h-[3rem] flex flex-col justify-center">
+                                                                            {(() => {
+                                                                                const parents = JSON.parse(localStorage.getItem('tutor_parents') || '[]');
+                                                                                const st = students.find(s => s.name === booking.student || s.name === booking.studentName);
+                                                                                const parent = st ? parents.find(p => p.linkedStudents && p.linkedStudents.includes(st.id)) : null;
+                                                                                const parentNote = parent && (() => { try { const o = JSON.parse(localStorage.getItem('tutor_parent_notes') || '{}'); return o[parent.email]?.note?.trim(); } catch (_) { return ''; } })();
+                                                                                const lessonNotes = (booking.lessonNotes || '').trim();
+                                                                                if (parentNote && lessonNotes) return <><p className="text-xs text-purple-600 font-bold">Student note: {lessonNotes}</p><p className="text-xs text-purple-600 font-bold mt-1">Parent note: {parentNote}</p></>;
+                                                                                if (parentNote) return <p className="text-xs text-purple-600 font-bold">Parent note: {parentNote}</p>;
+                                                                                if (lessonNotes) return <p className="text-xs text-purple-600 font-bold">Student note: {lessonNotes}</p>;
+                                                                                return <p>—</p>;
+                                                                            })()}
+                                                                        </div>
                                                                     </div>
-                                                                )}
-                                                            </div>
+                                                                    <div className="mt-1 text-xs">
+                                                                        <span className="font-black text-gray-400 uppercase tracking-widest">My comments (private)</span>
+                                                                        <TeacherPrivateNotesInput bookingId={booking.id} initialValue={(() => { try { const raw = localStorage.getItem('tutor_teacher_notes'); const o = raw ? JSON.parse(raw) : {}; return o[booking.id] || ''; } catch (_) { return ''; } })()} />
+                                                                    </div>
+                                                            </>
                                                         )}
                                                     </div>
                                                 </div>
@@ -1185,15 +1462,22 @@ const TeacherDashboard = () => {
                                                             >
                                                                 <Clock size={16} />
                                                             </button>
+                                                            {(() => {
+                                                                const packBookings = booking.recurringId ? bookings.filter(b => b.recurringId === booking.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time)) : [];
+                                                                const firstInPackPaid = packBookings.length === 10 && packBookings[0] && (packBookings[0].paymentStatus || '').toLowerCase() === 'paid';
+                                                                const isIn10Pack = packBookings.length === 10;
+                                                                const canStart = booking.type === 'consultation' || booking.paymentStatus === 'Due (Exception)' || (isIn10Pack ? firstInPackPaid : (booking.paymentStatus?.toLowerCase() === 'paid' || booking.paymentStatus === 'Due'));
+                                                                return (
                                                             <button
-                                                                onClick={() => {
-                                                                    const link = `${window.location.origin}/session/${booking.id}?host=true&name=${encodeURIComponent(booking.student)}&type=${booking.type || 'lesson'}`;
-                                                                    window.open(link, '_blank');
-                                                                }}
-                                                                className="bg-purple-600 text-white px-3 py-2 rounded-lg font-bold hover:bg-purple-700 shadow-md transition-all flex items-center gap-1 text-sm"
+                                                                onClick={() => canStart && (() => { const link = `${window.location.origin}/session/${booking.id}?host=true&name=${encodeURIComponent(booking.student)}&type=${booking.type || 'lesson'}`; window.open(link, '_blank'); })()}
+                                                                disabled={!canStart}
+                                                                title={!canStart ? 'Initial payment for this pack required before starting' : undefined}
+                                                                className={`px-3 py-2 rounded-lg font-bold shadow-md transition-all flex items-center gap-1 text-sm ${canStart ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}
                                                             >
                                                                 <Video size={16} /> {booking.type === 'consultation' ? 'Start Meeting' : 'Start Lesson'}
                                                             </button>
+                                                                );
+                                                            })()}
                                                             {booking.paymentStatus?.toLowerCase() !== 'paid' && booking.paymentStatus?.toLowerCase() !== 'due (exception)' && booking.type !== 'consultation' && (
                                                                 <button
                                                                     onClick={() => allowPayLater(booking)}
@@ -1204,16 +1488,7 @@ const TeacherDashboard = () => {
                                                                 </button>
                                                             )}
                                                             <button
-                                                                onClick={() => {
-                                                                    if (window.confirm(`Cancel lesson with ${booking.student}?`)) {
-                                                                        const updated = bookings.map(b =>
-                                                                            b.id === booking.id ? { ...b, status: 'cancelled' } : b
-                                                                        );
-                                                                        setBookings(updated);
-                                                                        localStorage.setItem('tutor_bookings', JSON.stringify(updated));
-                                                                        window.dispatchEvent(new Event('storage'));
-                                                                    }
-                                                                }}
+                                                                onClick={() => handleCancelClick(booking)}
                                                                 className="bg-red-100 text-red-600 px-3 py-2 rounded-lg font-bold hover:bg-red-200 transition-all flex items-center gap-1 text-sm"
                                                             >
                                                                 <X size={16} /> Cancel
@@ -1224,7 +1499,8 @@ const TeacherDashboard = () => {
                                             </div>
                                         ))}
                                     </div>
-                                )}
+                                );
+                                })()}
                             </div>
                         </div>
                     </div>
@@ -1437,17 +1713,35 @@ const TeacherDashboard = () => {
 
                         {/* Upcoming Sessions in Earnings */}
                         <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
-                            <div className="p-6 border-b border-gray-50 flex items-center justify-between">
+                            <div className="p-6 border-b border-gray-50 flex flex-wrap items-center justify-between gap-4">
                                 <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3">
                                     <Video className="text-indigo-500" /> Upcoming Scheduled Lessons
                                 </h2>
-                                <span className="bg-indigo-50 text-indigo-600 text-xs font-bold px-3 py-1 rounded-full">
-                                    {futureBookings.length} Lessons
-                                </span>
+                                <div className="flex items-center gap-3">
+                                    <select value={upcomingMonthFilter} onChange={(e) => setUpcomingMonthFilter(e.target.value)} className="rounded-xl border-2 border-gray-100 px-4 py-2 font-bold text-sm text-gray-800 bg-white focus:border-indigo-500">
+                                        {(() => {
+                                            const now = new Date();
+                                            const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                                            const monthSet = new Set(futureBookings.map(b => { const d = new Date(b.date); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }));
+                                            const sixMonthKeys = Array.from({ length: 6 }, (_, i) => { const d = new Date(now.getFullYear(), now.getMonth() + i, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
+                                            const months = [...new Set([...sixMonthKeys, ...monthSet])].sort();
+                                            return months.map(monthKey => {
+                                                const [yr, mo] = monthKey.split('-').map(Number);
+                                                return <option key={monthKey} value={monthKey}>{new Date(yr, mo - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}</option>;
+                                            });
+                                        })()}
+                                    </select>
+                                    <span className="bg-indigo-50 text-indigo-600 text-xs font-bold px-3 py-1 rounded-full">
+                                        {(() => { const [y, m] = (upcomingMonthFilter || '').split('-').map(Number); return futureBookings.filter(b => { const d = new Date(b.date); return d.getFullYear() === y && d.getMonth() + 1 === m; }).length; })()} Lessons
+                                    </span>
+                                </div>
                             </div>
                             <div className="p-0">
-                                {futureBookings.length === 0 ? (
-                                    <div className="p-12 text-center text-gray-400 italic">No upcoming sessions booked.</div>
+                                {(() => {
+                                    const [y, m] = (upcomingMonthFilter || '').split('-').map(Number);
+                                    const earningsMonthBookings = futureBookings.filter(b => { const d = new Date(b.date); return d.getFullYear() === y && d.getMonth() + 1 === m; });
+                                    return earningsMonthBookings.length === 0 ? (
+                                    <div className="p-12 text-center text-gray-400 italic">No upcoming sessions for this month.</div>
                                 ) : (
                                     <div className="overflow-x-auto">
                                         <table className="w-full">
@@ -1456,34 +1750,55 @@ const TeacherDashboard = () => {
                                                     <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Date & Time</th>
                                                     <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Student</th>
                                                     <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Subject</th>
+                                                    <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">My notes (private)</th>
                                                     <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Fee</th>
                                                     <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Actions</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-gray-50">
-                                                {futureBookings.map((booking) => (
+                                                {earningsMonthBookings.map((booking) => (
                                                     <tr key={booking.id} className="hover:bg-gray-50/50 transition-colors">
                                                         <td className="px-6 py-4">
                                                             <div className="font-bold text-gray-900">{new Date(booking.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</div>
                                                             <div className="text-xs text-indigo-500 font-medium uppercase tracking-tighter">{booking.time}</div>
                                                         </td>
                                                         <td className="px-6 py-4">
-                                                            <div className="flex items-center gap-2">
-                                                                <div className="font-bold text-gray-700">{booking.student}</div>
-                                                                {booking.type !== 'consultation' && (
-                                                                    <div title={booking.paymentStatus?.toLowerCase() === 'paid' ? 'Paid' : 'Payment Due'}>
-                                                                        {booking.paymentStatus?.toLowerCase() === 'paid' ? (
-                                                                            <CheckCircle size={14} className="text-green-500" />
-                                                                        ) : (
-                                                                            <AlertCircle size={14} className="text-orange-500" />
-                                                                        )}
-                                                                    </div>
-                                                                )}
+                                                            <div className="flex flex-col gap-0.5">
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="font-bold text-gray-700">{booking.student}</span>
+                                                                    {booking.type !== 'consultation' && (() => {
+                                                                        const packBookings = booking.recurringId ? bookings.filter(b => b.recurringId === booking.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time)) : [];
+                                                                        const firstInPackPaid = packBookings.length === 10 && packBookings[0] && (packBookings[0].paymentStatus || '').toLowerCase() === 'paid';
+                                                                        const bundleLabel = firstInPackPaid ? 'Paid in bulk' : 'Awaiting initial payment';
+                                                                        return (
+                                                                        <span title={booking.paymentStatus?.toLowerCase() === 'paid' ? 'Paid' : (booking.paymentStatus === 'In bundle' ? bundleLabel : 'Payment Due')}>
+                                                                            {booking.paymentStatus?.toLowerCase() === 'paid' ? (
+                                                                                <CheckCircle size={14} className="text-green-500" />
+                                                                            ) : booking.paymentStatus === 'In bundle' ? (
+                                                                                <span className="text-[10px] text-teal-600 font-bold">{bundleLabel}</span>
+                                                                            ) : (
+                                                                                <AlertCircle size={14} className="text-orange-500" />
+                                                                            )}
+                                                                        </span>
+                                                                        );
+                                                                    })()}
+                                                                </div>
+                                                                {(() => {
+                                                                    if (!booking.recurringId) return null;
+                                                                    const packBookings = bookings.filter(b => b.recurringId === booking.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+                                                                    if (packBookings.length !== 10) return null;
+                                                                    const index = packBookings.findIndex(b => b.id === booking.id);
+                                                                    const lessonNum = index >= 0 ? index + 1 : null;
+                                                                    return lessonNum ? <span className="text-xs text-teal-600 font-bold">Lesson {lessonNum}/10</span> : null;
+                                                                })()}
                                                             </div>
                                                         </td>
-                                                        <td className="px-6 py-4 text-sm text-gray-500">{booking.subject}</td>
+                                                        <td className="px-6 py-4 text-sm font-bold text-purple-600">{booking.subject || booking.topic || 'Lesson'}</td>
+                                                        <td className="px-6 py-2 align-top max-w-[200px]">
+                                                            <TeacherPrivateNotesInput bookingId={booking.id} initialValue={(() => { try { const raw = localStorage.getItem('tutor_teacher_notes'); const o = raw ? JSON.parse(raw) : {}; return o[booking.id] || ''; } catch (_) { return ''; } })()} />
+                                                        </td>
                                                         <td className="px-6 py-4 text-right">
-                                                            <span className="font-black text-gray-900">£{booking.cost || 30}</span>
+                                                            <span className="font-black text-gray-900">£{booking.paymentStatus === 'In bundle' || booking.cost === 0 ? 0 : (booking.cost ?? getRateFromSubject(booking.subject || booking.topic))}</span>
                                                         </td>
                                                         <td className="px-6 py-4 text-right">
                                                             <button
@@ -1499,7 +1814,8 @@ const TeacherDashboard = () => {
                                             </tbody>
                                         </table>
                                     </div>
-                                )}
+                                );
+                                })()}
                             </div>
                         </div>
 
@@ -1652,7 +1968,10 @@ const TeacherDashboard = () => {
                                                                 {student.name.charAt(0).toUpperCase()}
                                                             </div>
                                                             <div className="flex-1 min-w-0">
-                                                                <div className="font-bold text-gray-800 truncate">{student.name}</div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="font-bold text-gray-800 truncate">{student.name}</span>
+                                                                    <span className="text-[9px] font-black text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded uppercase">Student</span>
+                                                                </div>
                                                                 <div className="text-xs text-gray-500 truncate">
                                                                     {(chatMessages[threadKey] || []).length > 0
                                                                         ? chatMessages[threadKey][chatMessages[threadKey].length - 1].message
@@ -1660,7 +1979,7 @@ const TeacherDashboard = () => {
                                                                 </div>
                                                             </div>
                                                             {unreadCount > 0 && (
-                                                                <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">
+                                                                <span className="bg-red-500 text-white text-[10px] min-w-[1.25rem] h-5 px-1.5 py-0.5 rounded-full font-bold flex items-center justify-center" title={`${unreadCount} unread from student`}>
                                                                     {unreadCount}
                                                                 </span>
                                                             )}
@@ -1691,7 +2010,10 @@ const TeacherDashboard = () => {
                                                                     {parent.name?.charAt(0).toUpperCase() || '?'}
                                                                 </div>
                                                                 <div className="flex-1 min-w-0">
-                                                                    <div className="font-bold text-gray-800 truncate">{parent.firstName || parent.name}</div>
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className="font-bold text-gray-800 truncate">{parent.firstName || parent.name}</span>
+                                                                        <span className="text-[9px] font-black text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded uppercase">Parent</span>
+                                                                    </div>
                                                                     <div className="text-[10px] text-blue-600 font-bold uppercase tracking-wider mb-1">
                                                                         Child: {students.filter(s => parent.linkedStudents.includes(s.id)).map(s => s.name).join(', ') || 'Unknown'}
                                                                     </div>
@@ -1702,7 +2024,7 @@ const TeacherDashboard = () => {
                                                                     </div>
                                                                 </div>
                                                                 {unreadCount > 0 && (
-                                                                    <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">
+                                                                    <span className="bg-red-500 text-white text-[10px] min-w-[1.25rem] h-5 px-1.5 py-0.5 rounded-full font-bold flex items-center justify-center" title={`${unreadCount} unread from parent`}>
                                                                         {unreadCount}
                                                                     </span>
                                                                 )}
@@ -1731,7 +2053,7 @@ const TeacherDashboard = () => {
                                             </div>
                                             <div>
                                                 <div className="font-bold text-gray-800">
-                                                    {activeChatStudent.firstName || activeChatStudent.name} {messageType === 'parent' && '(Parent)'}
+                                                    {(activeChatStudent.firstName || activeChatStudent.name || (messageType === 'parent' ? 'No name set' : 'Student'))} {messageType === 'parent' && '(Parent)'}
                                                 </div>
                                                 <div className="text-[10px] text-blue-600 font-bold uppercase tracking-widest">
                                                     {messageType === 'parent' ? (
@@ -1740,10 +2062,25 @@ const TeacherDashboard = () => {
                                                         `Student ID: ${activeChatStudent.id}`
                                                     )}
                                                 </div>
-                                                <div className="text-xs text-gray-500">{messageType === 'parent' && `Email: ${activeChatStudent.email}`}</div>
                                             </div>
                                         </div>
 
+                                        {/* Parent's note for teacher (when chatting with a parent) */}
+                                            {activeChatStudent?.threadKey?.startsWith('parent_') && (() => {
+                                                try {
+                                                    const email = activeChatStudent.threadKey.replace('parent_', '');
+                                                    const raw = localStorage.getItem('tutor_parent_notes') || '{}';
+                                                    const o = JSON.parse(raw);
+                                                    const note = o[email]?.note?.trim();
+                                                    if (!note) return null;
+                                                    return (
+                                                        <div className="mx-6 mt-4 p-4 bg-blue-50 border border-blue-100 rounded-xl">
+                                                            <p className="text-xs font-bold text-blue-700 uppercase tracking-wider mb-1">Parent&apos;s note for you</p>
+                                                            <p className="text-sm text-gray-800 whitespace-pre-wrap">{note}</p>
+                                                        </div>
+                                                    );
+                                                } catch (_) { return null; }
+                                            })()}
                                         {/* Messages */}
                                         <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50">
                                             {(chatMessages[activeChatStudent.threadKey] || []).length === 0 ? (
@@ -1829,6 +2166,87 @@ const TeacherDashboard = () => {
                             </div>
                         </div>
                     </div>
+                ) : activeTab === 'settings' ? (
+                    <div className="animate-in slide-in-from-right-4 duration-300">
+                        <div className="flex items-center justify-between mb-8">
+                            <div>
+                                <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-3">
+                                    <Settings className="text-gray-600" /> Settings & Data
+                                </h2>
+                                <p className="text-gray-500">Manage your data and cloud synchronization.</p>
+                            </div>
+                        </div>
+                        <div className="max-w-2xl space-y-6">
+                            <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+                                <h3 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2"><User size={20} className="text-purple-600" /> Student lesson type</h3>
+                                <p className="text-sm text-gray-500 mb-4">Set the lesson type (and pricing) for each student. This updates what they see on their dashboard. If they chose wrong at signup, change it here.</p>
+                                <div className="space-y-3">
+                                    {students.map(s => (
+                                        <div key={s.id} className="flex items-center gap-4 p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                            <span className="font-bold text-gray-800 min-w-[120px]">{s.name}</span>
+                                            <select
+                                                value={LESSON_TYPE_OPTIONS.includes(s.subject) ? s.subject : LESSON_TYPE_OPTIONS[0]}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    const raw = JSON.parse(localStorage.getItem('tutor_students') || '[]');
+                                                    const updated = raw.map(st => st.id === s.id ? { ...st, subject: val } : st);
+                                                    localStorage.setItem('tutor_students', JSON.stringify(updated));
+                                                    setStudents(updated);
+                                                    const bookingsRaw = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+                                                    const updatedBookings = bookingsRaw.map(b => (b.student === s.name || b.studentName === s.name) && b.status !== 'cancelled' ? { ...b, subject: val } : b);
+                                                    localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
+                                                    setBookings(updatedBookings);
+                                                    window.dispatchEvent(new Event('storage'));
+                                                }}
+                                                className="flex-1 max-w-[220px] rounded-xl border-2 border-purple-100 px-3 py-2 font-bold text-gray-800 focus:border-purple-500 outline-none"
+                                            >
+                                                {LESSON_TYPE_OPTIONS.map(opt => (
+                                                    <option key={opt} value={opt}>{opt} — £{getRateFromSubject(opt)}/hr</option>
+                                                ))}
+                                            </select>
+                                            <span className="text-xs text-gray-500">£{getRateFromSubject(LESSON_TYPE_OPTIONS.includes(s.subject) ? s.subject : LESSON_TYPE_OPTIONS[0])}/hr</span>
+                                        </div>
+                                    ))}
+                                    {students.length === 0 && <p className="text-gray-400 italic text-sm">No students yet. Add students in the Students tab.</p>}
+                                </div>
+                            </div>
+                            <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+                                <MigrateData />
+                            </div>
+                            <div className="bg-white p-6 rounded-2xl shadow-lg border border-red-100">
+                                <h3 className="text-lg font-bold text-gray-800 mb-2">Clear all test data</h3>
+                                <p className="text-sm text-gray-500 mb-4">Remove all students, parents, bookings, lesson slots, chats and session history from this browser and (if using Supabase) from the database. Dashboards will stay the same but will be empty.</p>
+                                <button
+                                    type="button"
+                                    onClick={async () => {
+                                        if (!window.confirm('Permanently delete ALL students, parents, bookings, slots, chats and session history? This cannot be undone.')) return;
+                                        const keys = ['tutor_students', 'tutor_parents', 'tutor_bookings', 'tutor_lesson_slots', 'tutor_slots', 'tutor_all_lesson_slots', 'chat_messages_v2', 'tutor_student_pins', 'tutor_student_extras', 'tutor_session_history'];
+                                        keys.forEach(k => localStorage.removeItem(k));
+                                        setStudents([]);
+                                        setParents([]);
+                                        setBookings([]);
+                                        setLessonSlots([]);
+                                        setSlots([]);
+                                        setChatMessages({});
+                                        setSessionHistory([]);
+                                        setActiveChatStudent(null);
+                                        setActiveChatParent(null);
+                                        try {
+                                            if (dataService.isUsingBackend) {
+                                                const allStudents = await dataService.getStudents();
+                                                for (const s of allStudents) await dataService.deleteStudent(s.id).catch(() => {});
+                                            }
+                                        } catch (_) {}
+                                        window.dispatchEvent(new Event('storage'));
+                                        setNotification({ type: 'success', message: 'All test data cleared.' });
+                                    }}
+                                    className="px-4 py-2 bg-red-100 text-red-700 rounded-xl font-bold hover:bg-red-200 transition-colors"
+                                >
+                                    Clear all data
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 ) : null}
 
                 {/* Date Details Modal */}
@@ -1844,19 +2262,27 @@ const TeacherDashboard = () => {
                                 </div>
 
                                 <div className="space-y-6">
-                                    {/* Bookings List (New Section) */}
+                                    {/* Bookings List: real bookings + fallback (lessonSlots with bookedBy) */}
                                     <div>
                                         <h4 className="text-xs font-bold text-gray-400 uppercase mb-3">Booked Lessons</h4>
                                         <div className="space-y-2">
-                                            {bookings.filter(b => b.date === selectedDate.toISOString().split('T')[0] && b.status !== 'cancelled').length === 0 ? (
-                                                <p className="text-sm text-gray-400 italic text-center py-2">No bookings for this date.</p>
-                                            ) : (
-                                                bookings.filter(b => b.date === selectedDate.toISOString().split('T')[0] && b.status !== 'cancelled').map(booking => (
+                                            {(() => {
+                                                const dateStr = selectedDate.toISOString().split('T')[0];
+                                                const dayBookings = bookings.filter(b => b.date === dateStr && b.status !== 'cancelled');
+                                                const fallbackForDate = lessonSlots
+                                                    .filter(s => s.date === dateStr && s.bookedBy && !dayBookings.some(b => b.time === s.time))
+                                                    .map(s => ({ id: s.id, date: s.date, time: s.time, student: s.bookedBy, status: 'confirmed_fallback', isFallback: true }));
+                                                const allForDate = [...dayBookings, ...fallbackForDate];
+                                                if (allForDate.length === 0) {
+                                                    return <p className="text-sm text-gray-400 italic text-center py-2">No bookings for this date.</p>;
+                                                }
+                                                return allForDate.map(booking => (
                                                     <div key={booking.id} className="flex items-center justify-between p-3 bg-purple-50 rounded-xl border border-purple-100">
                                                         <div>
                                                             <div className="font-bold text-gray-800 flex items-center gap-2">
                                                                 {booking.student}
-                                                                {booking.bookingFor && (
+                                                                {booking.isFallback && <span className="text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded font-bold">Slot</span>}
+                                                                {!booking.isFallback && booking.bookingFor && (
                                                                     <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${booking.bookingFor === 'pupil' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
                                                                         {booking.bookingFor === 'pupil' ? '👨‍🎓 Pupil' : '👨‍👩‍👧 Parent'}
                                                                     </span>
@@ -1864,72 +2290,79 @@ const TeacherDashboard = () => {
                                                             </div>
                                                             <div className="text-xs text-gray-500 flex items-center gap-1">
                                                                 <Clock size={12} /> {formatTime(booking.time)}
-                                                                {booking.status === 'pending_reschedule' && <span className="text-orange-500 font-bold ml-1">(Rescheduling)</span>}
+                                                                {!booking.isFallback && booking.status === 'pending_reschedule' && <span className="text-orange-500 font-bold ml-1">(Rescheduling)</span>}
                                                             </div>
                                                         </div>
                                                         <div className="flex gap-2">
-                                                            <button
-                                                                onClick={() => {
-                                                                    setSelectedDate(null); // Close the date modal
-                                                                    initiateTeacherReschedule(booking); // Open reschedule modal
-                                                                }}
-                                                                className="bg-white text-purple-600 border border-purple-200 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-purple-600 hover:text-white transition-all shadow-sm"
-                                                            >
-                                                                Reschedule
-                                                            </button>
-                                                            <button
-                                                                onClick={() => {
-                                                                    if (window.confirm(`Cancel lesson with ${booking.student}?`)) {
-                                                                        const updated = bookings.map(b => b.id === booking.id ? { ...b, status: 'cancelled' } : b);
-                                                                        setBookings(updated);
-                                                                        localStorage.setItem('tutor_bookings', JSON.stringify(updated));
-                                                                        window.dispatchEvent(new Event('storage'));
-
-                                                                        // Notify Student of Cancellation
-                                                                        emailService.sendCancellationNotice(booking, 'teacher');
-
-                                                                        setSelectedDate(null);
-                                                                    }
-                                                                }}
-                                                                className="bg-red-100 text-red-600 border border-red-200 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-600 hover:text-white transition-all shadow-sm"
-                                                            >
-                                                                Cancel
-                                                            </button>
-                                                            {booking.recurringId && (
+                                                            {booking.isFallback ? (
                                                                 <button
                                                                     onClick={() => {
-                                                                        if (window.confirm(`Delete ALL future lessons in this series for ${booking.student}?`)) {
-                                                                            // 1. Find all future bookings with same recurringId
-                                                                            const now = new Date();
-                                                                            const seriesToDelete = bookings.filter(b =>
-                                                                                b.recurringId === booking.recurringId &&
-                                                                                new Date(b.date + 'T' + b.time) >= now
-                                                                            );
-
-                                                                            // 2. Remove them
-                                                                            const updated = bookings.filter(b => !seriesToDelete.find(s => s.id === b.id));
-                                                                            setBookings(updated);
-                                                                            localStorage.setItem('tutor_bookings', JSON.stringify(updated));
+                                                                        if (window.confirm(`Remove this lesson slot with ${booking.student}?`)) {
+                                                                            const updatedSlots = lessonSlots.map(s => s.id === booking.id ? { ...s, bookedBy: null } : s);
+                                                                            setLessonSlots(updatedSlots);
+                                                                            localStorage.setItem('tutor_lesson_slots', JSON.stringify(updatedSlots));
                                                                             window.dispatchEvent(new Event('storage'));
-
-                                                                            // 3. Notify Student (Send one email for the batch)
-                                                                            emailService.sendCancellationNotice({
-                                                                                ...booking,
-                                                                                subject: `${booking.subject} (Entire Series Cancelled)`
-                                                                            }, 'teacher');
-
                                                                             setSelectedDate(null);
                                                                         }
                                                                     }}
-                                                                    className="bg-red-600 text-white border border-red-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 transition-all shadow-sm"
+                                                                    className="bg-red-100 text-red-600 border border-red-200 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-600 hover:text-white transition-all shadow-sm"
                                                                 >
-                                                                    Cancel Series
+                                                                    Remove
                                                                 </button>
+                                                            ) : (
+                                                                <>
+                                                                    <button
+                                                                        onClick={() => {
+                                                                            setSelectedDate(null);
+                                                                            initiateTeacherReschedule(booking);
+                                                                        }}
+                                                                        className="bg-white text-purple-600 border border-purple-200 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-purple-600 hover:text-white transition-all shadow-sm"
+                                                                    >
+                                                                        Reschedule
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => {
+                                                                            if (window.confirm(`Cancel lesson with ${booking.student}?`)) {
+                                                                                const updated = bookings.map(b => b.id === booking.id ? { ...b, status: 'cancelled' } : b);
+                                                                                setBookings(updated);
+                                                                                localStorage.setItem('tutor_bookings', JSON.stringify(updated));
+                                                                                window.dispatchEvent(new Event('storage'));
+                                                                                emailService.sendCancellationNotice(booking, 'teacher');
+                                                                                setSelectedDate(null);
+                                                                            }
+                                                                        }}
+                                                                        className="bg-red-100 text-red-600 border border-red-200 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-600 hover:text-white transition-all shadow-sm"
+                                                                    >
+                                                                        Cancel
+                                                                    </button>
+                                                                    {booking.recurringId && (
+                                                                        <button
+                                                                            onClick={() => {
+                                                                                if (window.confirm(`Delete ALL future lessons in this series for ${booking.student}?`)) {
+                                                                                    const now = new Date();
+                                                                                    const seriesToDelete = bookings.filter(b =>
+                                                                                        b.recurringId === booking.recurringId &&
+                                                                                        new Date(b.date + 'T' + b.time) >= now
+                                                                                    );
+                                                                                    const updated = bookings.filter(b => !seriesToDelete.find(s => s.id === b.id));
+                                                                                    setBookings(updated);
+                                                                                    localStorage.setItem('tutor_bookings', JSON.stringify(updated));
+                                                                                    window.dispatchEvent(new Event('storage'));
+                                                                                    emailService.sendCancellationNotice({ ...booking, subject: `${booking.subject} (Entire Series Cancelled)` }, 'teacher');
+                                                                                    setSelectedDate(null);
+                                                                                }
+                                                                            }}
+                                                                            className="bg-red-600 text-white border border-red-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 transition-all shadow-sm"
+                                                                        >
+                                                                            Cancel Series
+                                                                        </button>
+                                                                    )}
+                                                                </>
                                                             )}
                                                         </div>
                                                     </div>
-                                                ))
-                                            )}
+                                                ));
+                                            })()}
                                         </div>
                                         <div className="h-px bg-gray-100 my-4"></div>
                                     </div>
@@ -2062,17 +2495,17 @@ const TeacherDashboard = () => {
                 {/* Weekly Schedule Settings Modal */}
                 {
                     showScheduleModal && (
-                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 text-left overflow-y-auto pt-8 pb-8" onClick={() => setShowScheduleModal(false)}>
-                            <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-                                <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 text-left overflow-y-auto pt-8 pb-8" onClick={(e) => e.target === e.currentTarget && setShowScheduleModal(false)}>
+                            <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full flex flex-col animate-in zoom-in-95 max-h-[90vh]" onClick={e => e.stopPropagation()}>
+                                <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 shrink-0">
                                     <div>
                                         <h2 className="text-xl font-bold text-gray-900">Consultation Hours (Weekly)</h2>
-                                        <p className="text-sm text-gray-500">Auto-generates 15-min consultation slots.</p>
+                                        <p className="text-sm text-gray-500">Auto-generates 15-min consultation slots. Scroll for Saturday & Sunday.</p>
                                     </div>
-                                    <button onClick={() => setShowScheduleModal(false)} className="p-2 hover:bg-gray-200 rounded-full text-gray-400">✕</button>
+                                    <button type="button" onClick={() => setShowScheduleModal(false)} className="p-2 hover:bg-gray-200 rounded-full text-gray-400">✕</button>
                                 </div>
 
-                                <div className="overflow-y-auto p-6 custom-scrollbar">
+                                <div className="overflow-y-auto p-6 custom-scrollbar min-h-0 flex-1">
                                     {weeklySchedule.map((day, dIndex) => (
                                         <div key={day.day} className={`p-4 border-b border-gray-50 last:border-0 transition-colors ${day.active ? 'bg-white' : 'bg-gray-50/50 rounded-xl'}`}>
                                             <div className="flex items-start gap-4">
@@ -2133,7 +2566,7 @@ const TeacherDashboard = () => {
                                     ))}
                                 </div>
                                 <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end">
-                                    <button onClick={() => setShowScheduleModal(false)} className="px-6 py-2 bg-gray-900 text-white rounded-xl font-bold hover:bg-gray-800 transition-colors">Done</button>
+                                    <button type="button" onClick={() => setShowScheduleModal(false)} className="px-6 py-2 bg-gray-900 text-white rounded-xl font-bold hover:bg-gray-800 transition-colors">Done</button>
                                 </div>
                             </div>
                         </div>
@@ -2211,6 +2644,7 @@ const TeacherDashboard = () => {
                                             <option value={10}>10 Weeks</option>
                                             <option value={12}>12 Weeks</option>
                                         </select>
+                                        {recurringConfig.weeks === 10 && <p className="mt-1.5 text-xs text-gray-500 font-medium">£280 for 10 lessons</p>}
                                     </div>
                                     <button type="submit" className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 transition-all mt-2">
                                         Confirm Booking
@@ -2396,31 +2830,128 @@ const TeacherDashboard = () => {
                 }
                 {/* Cancellation Confirmation Modal */}
                 {
-                    cancelConfirm && (
-                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[150] flex items-center justify-center p-4" onClick={() => setCancelConfirm(null)}>
-                            <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 text-center" onClick={e => e.stopPropagation()}>
-                                <Trash2 className="mx-auto text-red-500 mb-4" size={40} />
-                                <h3 className="text-xl font-black mb-2">Cancel Lesson?</h3>
-                                <p className="text-gray-500 mb-6 font-bold text-sm">
-                                    {cancelConfirm.booking.recurringId
-                                        ? "This session is part of a recurring series. Would you like to cancel just this one, or the entire series?"
-                                        : `Are you sure you want to cancel the session for ${cancelConfirm.booking.student} on ${new Date(cancelConfirm.booking.date).toLocaleDateString('en-GB')} at ${cancelConfirm.booking.time}?`}
-                                </p>
-                                <div className="flex flex-col gap-3">
-                                    {cancelConfirm.booking.recurringId ? (
+                    cancelConfirm && (() => {
+                        const pack = bookings.filter(b => b.recurringId === cancelConfirm.booking.recurringId && b.status !== 'cancelled');
+                        const isPaidPack = pack.length === 10 && pack[0] && (pack[0].paymentStatus || '').toLowerCase() === 'paid';
+                        return (
+                            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[150] flex items-center justify-center p-4" onClick={() => setCancelConfirm(null)}>
+                                <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 text-center" onClick={e => e.stopPropagation()}>
+                                    {isPaidPack ? (
                                         <>
-                                            <button onClick={() => confirmCancellation('single')} className="w-full py-3 bg-red-100 text-red-600 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-red-200 transition-all">Cancel Just This One</button>
-                                            <button onClick={() => confirmCancellation('series')} className="w-full py-3 bg-red-600 text-white rounded-xl font-black shadow-lg uppercase tracking-widest text-xs hover:bg-red-700 transition-all">Cancel Entire Series</button>
+                                            <AlertCircle className="mx-auto text-amber-500 mb-4" size={40} />
+                                            <h3 className="text-xl font-black mb-2">Bulk paid slot</h3>
+                                            <p className="text-gray-600 mb-6 font-bold text-sm">
+                                                You cannot cancel a bulk paid slot. Please reschedule to a new time instead. Refunds are not available for individual sessions in a paid pack.
+                                            </p>
+                                            <div className="flex flex-col gap-3">
+                                                <button
+                                                    onClick={() => { initiateTeacherReschedule(cancelConfirm.booking); setCancelConfirm(null); }}
+                                                    className="w-full py-3 bg-teal-600 text-white rounded-xl font-black uppercase tracking-widest text-xs hover:bg-teal-700 transition-all"
+                                                >
+                                                    Reschedule instead
+                                                </button>
+                                                <button onClick={() => setCancelConfirm(null)} className="w-full py-3 text-gray-400 font-black uppercase tracking-widest text-xs">Keep Session</button>
+                                            </div>
                                         </>
                                     ) : (
-                                        <button onClick={() => confirmCancellation('single')} className="w-full py-3 bg-red-600 text-white rounded-xl font-black shadow-lg uppercase tracking-widest text-xs">Confirm Cancellation</button>
+                                        <>
+                                            <Trash2 className="mx-auto text-red-500 mb-4" size={40} />
+                                            <h3 className="text-xl font-black mb-2">Cancel Lesson?</h3>
+                                            <p className="text-gray-500 mb-6 font-bold text-sm">
+                                                {cancelConfirm.booking.recurringId
+                                                    ? "This session is part of a recurring series. Would you like to cancel just this one, or the entire series?"
+                                                    : `Are you sure you want to cancel the session for ${cancelConfirm.booking.student} on ${new Date(cancelConfirm.booking.date).toLocaleDateString('en-GB')} at ${cancelConfirm.booking.time}?`}
+                                            </p>
+                                            <div className="flex flex-col gap-3">
+                                                {cancelConfirm.booking.recurringId ? (
+                                                    <>
+                                                        <button onClick={() => confirmCancellation('single')} className="w-full py-3 bg-red-100 text-red-600 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-red-200 transition-all">Cancel Just This One</button>
+                                                        <button onClick={() => confirmCancellation('series')} className="w-full py-3 bg-red-600 text-white rounded-xl font-black shadow-lg uppercase tracking-widest text-xs hover:bg-red-700 transition-all">Cancel Entire Series</button>
+                                                    </>
+                                                ) : (
+                                                    <button onClick={() => confirmCancellation('single')} className="w-full py-3 bg-red-600 text-white rounded-xl font-black shadow-lg uppercase tracking-widest text-xs">Confirm Cancellation</button>
+                                                )}
+                                                <button onClick={() => setCancelConfirm(null)} className="w-full py-3 text-gray-400 font-black uppercase tracking-widest text-xs">Keep Session</button>
+                                            </div>
+                                        </>
                                     )}
-                                    <button onClick={() => setCancelConfirm(null)} className="w-full py-3 text-gray-400 font-black uppercase tracking-widest text-xs">Keep Session</button>
                                 </div>
                             </div>
-                        </div>
-                    )
+                        );
+                    })()
                 }
+
+                {/* Complete lesson notes modal (for sessions skipped at end) */}
+                {completeNotesFor && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+                        <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto m-4">
+                            <div className="p-6 border-b border-gray-100">
+                                <h3 className="text-xl font-bold text-gray-900">Complete lesson summary</h3>
+                                <p className="text-sm text-gray-500 mt-1">{completeNotesFor.studentName} — {completeNotesFor.date ? new Date(completeNotesFor.date).toLocaleDateString('en-GB') : ''}</p>
+                            </div>
+                            <form onSubmit={submitCompleteNotes} className="p-6 space-y-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Topics Covered</label>
+                                    <input required type="text" value={completeNotesTopic} onChange={e => setCompleteNotesTopic(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-purple-500 outline-none" placeholder="e.g. Algebra Basics" />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1">What went well?</label>
+                                        <textarea required value={completeNotesWell} onChange={e => setCompleteNotesWell(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-green-500 outline-none h-24 text-sm" placeholder="Great focus today..." />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Improvements?</label>
+                                        <textarea required value={completeNotesImprove} onChange={e => setCompleteNotesImprove(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-amber-500 outline-none h-24 text-sm" placeholder="Practice more..." />
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Focus</label>
+                                        <textarea value={completeNotesFocus} onChange={e => setCompleteNotesFocus(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-blue-500 outline-none h-24 text-sm" placeholder="Key topics focused on..." />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Homework/Next Steps</label>
+                                        <textarea value={completeNotesNextSteps} onChange={e => setCompleteNotesNextSteps(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-gray-200 bg-gray-50 focus:border-purple-500 outline-none h-24 text-sm" placeholder="E.g. Focus on quadratic equations" />
+                                    </div>
+                                </div>
+                                <div className="flex gap-3 pt-2">
+                                    <button type="submit" className="flex-1 py-3 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700">Save lesson summary</button>
+                                    <button type="button" onClick={() => { setCompleteNotesFor(null); setCompleteNotesTopic(''); setCompleteNotesWell(''); setCompleteNotesImprove(''); setCompleteNotesFocus(''); setCompleteNotesNextSteps(''); }} className="py-3 px-4 text-gray-500 hover:text-gray-700 font-bold rounded-xl border border-gray-200">Cancel</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
+
+                {/* Session notes modal */}
+                {sessionNotesStudent && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4" onClick={() => setSessionNotesStudent(null)}>
+                        <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[80vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+                            <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+                                <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                                    <FileText size={20} className="text-teal-600" /> Session notes – {sessionNotesStudent.name}
+                                </h3>
+                                <button onClick={() => setSessionNotesStudent(null)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg">×</button>
+                            </div>
+                            <div className="p-4 overflow-y-auto space-y-4">
+                                {(() => {
+                                    const history = JSON.parse(localStorage.getItem('tutor_session_history') || '[]');
+                                    const forStudent = history.filter(s => (s.studentName || s.student || '').toLowerCase() === (sessionNotesStudent.name || '').toLowerCase()).sort((a, b) => new Date(a.date + 'T' + (a.time || '00:00')) - new Date(b.date + 'T' + (b.time || '00:00')));
+                                    if (forStudent.length === 0) return <p className="text-gray-500 text-sm">No session notes yet.</p>;
+                                    return forStudent.map((s, i) => (
+                                        <div key={s.id || i} className="p-4 bg-gray-50 rounded-xl border border-gray-100 text-left">
+                                            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">{s.date ? new Date(s.date).toLocaleDateString('en-GB') : 'Session'}</p>
+                                            <p className="font-bold text-gray-900 mt-1">{s.topic || s.subject || 'Lesson'}</p>
+                                            {s.next_steps && <p className="text-sm text-gray-700 mt-2"><span className="font-semibold text-gray-500">Next steps:</span> {s.next_steps}</p>}
+                                            {s.feedback_well && <p className="text-sm text-gray-700 mt-1"><span className="font-semibold text-gray-500">Went well:</span> {s.feedback_well}</p>}
+                                            {s.feedback_improve && <p className="text-sm text-gray-700 mt-1"><span className="font-semibold text-gray-500">To improve:</span> {s.feedback_improve}</p>}
+                                        </div>
+                                    ));
+                                })()}
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Notification UI */}
                 {notification && (

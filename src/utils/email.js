@@ -1,19 +1,12 @@
 /**
  * Email Service Utility
- * 
- * Uses EmailJS for client-side notifications (confirmations)
- */
-
-/**
- * Email Service Utility
- * 
- * Uses Supabase Edge Functions (Resend) for notifications
+ * Uses Supabase Edge Functions + Resend for sending emails (no EmailJS; higher limits, no quota issues).
  */
 
 import supabase from '../services/supabase';
 
-// Teacher Configuration
-const TEACHER_EMAIL = 'davina.potter@outlook.com';
+// Teacher Configuration (export for use in dashboards when notifying teacher)
+export const TEACHER_EMAIL = 'davina.potter@outlook.com';
 
 export const emailService = {
     /**

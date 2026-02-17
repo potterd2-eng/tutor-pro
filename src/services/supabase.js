@@ -1,8 +1,9 @@
-import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config/supabase';
+// import { createClient } from '@supabase/supabase-js'; // Removed
+import { supabase } from '../config/supabase';
 
 // Initialize Supabase client
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY); // Removed to prevent crash
+
 
 // ============================================
 // AUTHENTICATION SERVICES
@@ -77,11 +78,17 @@ export const studentService = {
         return data;
     },
 
-    // Create student
+    // Create student (only columns that exist in DB: id, name, email, user_id)
     async create(student) {
+        if (!supabase) throw new Error('Supabase not configured');
+        const row = {
+            name: student.name,
+            email: student.email || `${String(student.name).replace(/\s+/g, '').toLowerCase()}_${Date.now()}@example.com`
+        };
+        if (student.user_id) row.user_id = student.user_id;
         const { data, error } = await supabase
             .from('students')
-            .insert([student])
+            .insert([row])
             .select()
             .single();
         if (error) throw error;

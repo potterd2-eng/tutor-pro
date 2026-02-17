@@ -539,7 +539,7 @@ const VideoChat = ({ onConnection, isStudent, isHost, roomId }) => {
                     </div>
 
                     {/* Controls Overlay */}
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
+                    <div className="absolute inset-0 bg-black/40 opacity-100 transition-opacity flex items-center justify-center gap-3">
                         <button onClick={toggleAudio} className={`p-2.5 rounded-full ${isAudio ? 'bg-white text-brand-navy' : 'bg-red-500 text-white'} hover:scale-110 transition-transform`} title={isAudio ? "Mute" : "Unmute"}>
                             {isAudio ? <Mic size={16} /> : <MicOff size={16} />}
                         </button>
@@ -576,19 +576,20 @@ const VideoChat = ({ onConnection, isStudent, isHost, roomId }) => {
             </div>
 
             {/* Enlarge Overlay Modal */}
+            {/* Enlarge Overlay Modal */}
             {enlargedFeed && (
-                <div className="fixed inset-0 bg-black/95 z-[200] flex flex-col p-4 animate-in fade-in duration-300">
-                    <div className="flex justify-between items-center mb-4 px-4">
+                <div className="fixed inset-0 bg-gray-900/95 z-[200] flex flex-col p-4 animate-in fade-in duration-300">
+                    <div className="flex justify-between items-center mb-4 px-4 bg-gray-800 p-4 rounded-xl">
                         <h3 className="text-white font-bold text-xl flex items-center gap-3">
                             <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
-                            {enlargedFeed === 'local' ? 'Your Shared Screen / Video' : (isStudent ? "Teacher's Presentation" : "Student's Shared Screen")}
+                            {enlargedFeed === 'local' ? 'Your Shared Screen' : (isStudent ? "Teacher's Presentation" : "Student's Shared Screen")}
                         </h3>
                         <button
                             onClick={() => setEnlargedFeed(null)}
-                            className="bg-white/10 hover:bg-white/20 text-white p-3 rounded-full transition-all flex items-center gap-2 group"
+                            className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-full transition-all flex items-center gap-2 shadow-lg font-bold"
                         >
-                            <span className="text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity">Exit Full Screen</span>
-                            <span className="text-2xl leading-none">×</span>
+                            <span>CLOSE VIEW</span>
+                            <span className="text-xl leading-none">×</span>
                         </button>
                     </div>
 
@@ -611,7 +612,7 @@ const VideoChat = ({ onConnection, isStudent, isHost, roomId }) => {
                     </div>
 
                     <div className="h-16 flex items-center justify-center text-white/30 text-sm tracking-widest font-bold">
-                        HINT: PRESS ESC OR THE CLOSE BUTTON TO RETURN TO WHITEBOARD
+                        CLICK 'CLOSE VIEW' TO RETURN TO WHITEBOARD
                     </div>
                 </div>
             )}

@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as pdfjsLib from 'pdfjs-dist';
 // Vite handles worker loading via import?url
@@ -6,20 +6,21 @@ import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import Toolbar from './Toolbar';
 import { useWhiteboard } from '../hooks/useWhiteboard';
 import { jsPDF } from 'jspdf';
-import { Download, GraduationCap, DollarSign, PoundSterling, Clock, FileText, X, LogOut } from 'lucide-react';
+import html2canvas from 'html2canvas';
+import { Download, GraduationCap, Clock, FileText, X, LogOut } from 'lucide-react';
 
 // Set worker source
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson }) => {
+const Whiteboard = forwardRef(({ connection, isHost, sessionId, studentName, onEndLesson, showLessonTimer = true }, ref) => {
     const navigate = useNavigate();
     const canvasRef = useRef(null);
     const viewportRef = useRef(null);
     const pdfContainerRef = useRef(null);
+    const textInputRef = useRef(null);
 
     // UI State
     const [gridMode, setGridMode] = useState(false); // Squared paper toggle
-    const [showPricing, setShowPricing] = useState(false);
     const [showNotes, setShowNotes] = useState(false);
     const [notes, setNotes] = useState(localStorage.getItem('davina_notes') || '');
 
@@ -121,16 +122,354 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
         size, setSize,
         transform, setTransform,
         zoomIn, zoomOut,
-        page, totalPages, nextPage, prevPage, addPage, clearCanvas,
+        page, totalPages, nextPage, prevPage, addPage, deletePage, clearCanvas,
+        pageTypes, getPageType, getDocContent, setDocContent,
         undo, redo,
         activeText, setActiveText, finalizeText,
         events
-    } = useWhiteboard(canvasRef, viewportRef, connection, sessionId);
+    } = useWhiteboard(canvasRef, viewportRef, connection, sessionId, studentName);
 
-    // PDF Logic - Optimized
+    const [showAddPageMenu, setShowAddPageMenu] = useState(false);
+    const [documentContent, setDocumentContent] = useState('');
+    const docEditableRef = useRef(null);
+    const isDocumentPage = getPageType(page) === 'document';
+
+    useEffect(() => {
+        if (!isDocumentPage) return;
+        const raw = getDocContent(page) || '';
+        setDocumentContent(raw);
+        const t = setTimeout(() => {
+            if (docEditableRef.current) docEditableRef.current.innerHTML = raw;
+        }, 0);
+        return () => clearTimeout(t);
+    }, [page, isDocumentPage]);
+
+    useEffect(() => {
+        if (!isDocumentPage) return;
+        const onSelectionChange = () => {
+            const sel = document.getSelection();
+            if (!docEditableRef.current || !sel.rangeCount) return;
+            const range = sel.getRangeAt(0);
+            if (docEditableRef.current.contains(range.commonAncestorContainer)) {
+                try {
+                    savedDocSelectionRef.current = { range: range.cloneRange() };
+                } catch (_) {}
+            }
+        };
+        document.addEventListener('selectionchange', onSelectionChange);
+        return () => document.removeEventListener('selectionchange', onSelectionChange);
+    }, [isDocumentPage]);
+
+    const savedDocSelectionRef = useRef(null);
+
+    const applyDocFormat = (cmd, value) => {
+        if (!docEditableRef.current) return;
+        const el = docEditableRef.current;
+        const savedRange = savedDocSelectionRef.current?.range;
+        el.focus();
+        const sel = document.getSelection();
+        if (savedRange) {
+            try {
+                sel.removeAllRanges();
+                sel.addRange(savedRange);
+            } catch (_) {}
+        }
+        const s = document.getSelection();
+        let r = s.rangeCount ? s.getRangeAt(0) : null;
+        if (savedRange && (!r || r.collapsed)) {
+            try {
+                s.removeAllRanges();
+                s.addRange(savedRange);
+                r = s.rangeCount ? s.getRangeAt(0) : null;
+            } catch (_) {}
+        }
+        if (!r && savedRange) r = savedRange;
+        if (cmd === 'backColor') {
+            if (value && value !== 'transparent') {
+                const range = r && !r.collapsed ? r : null;
+                if (range) {
+                    try {
+                        const span = document.createElement('span');
+                        span.style.backgroundColor = value;
+                        span.style.color = 'inherit';
+                        span.style.padding = '0 1px';
+                        try {
+                            range.surroundContents(span);
+                        } catch (_) {
+                            const fragment = range.extractContents();
+                            while (fragment.firstChild) span.appendChild(fragment.firstChild);
+                            range.insertNode(span);
+                        }
+                    } catch (_) {}
+                }
+            } else {
+                document.execCommand('removeFormat', false);
+            }
+        } else if (cmd === 'foreColor' && value) {
+            const range = r && !r.collapsed ? r : null;
+            if (!range) {
+                document.execCommand('foreColor', false, value);
+            } else {
+                const fullLen = (el.innerText || '').trim().length;
+                const selLen = (range.toString() || '').trim().length;
+                const isFullContent = fullLen > 0 && selLen >= Math.max(1, fullLen - 2) ||
+                    range.commonAncestorContainer === el ||
+                    (range.startContainer === el && range.endContainer === el && range.startOffset === 0 && range.endOffset === el.childNodes.length);
+                const setDescendantsColorInherit = (node) => {
+                    try {
+                        const all = node.querySelectorAll ? node.querySelectorAll('*') : [];
+                        all.forEach((n) => { n.style.color = 'inherit'; });
+                    } catch (_) {}
+                };
+                if (isFullContent) {
+                    const wrapper = document.createElement('span');
+                    wrapper.style.color = value;
+                    while (el.firstChild) wrapper.appendChild(el.firstChild);
+                    el.appendChild(wrapper);
+                    setDescendantsColorInherit(wrapper);
+                } else {
+                    try {
+                        const span = document.createElement('span');
+                        span.style.color = value;
+                        try {
+                            range.surroundContents(span);
+                        } catch (_) {
+                            const fragment = range.extractContents();
+                            while (fragment.firstChild) span.appendChild(fragment.firstChild);
+                            range.insertNode(span);
+                        }
+                        setDescendantsColorInherit(span);
+                    } catch (_) {
+                        document.execCommand('foreColor', false, value);
+                    }
+                }
+            }
+        }
+        try { setDocContent(page, el.innerHTML); } catch (_) {}
+    };
+
+    const saveDocSelection = () => {
+        const sel = document.getSelection();
+        if (!docEditableRef.current || !sel.rangeCount) return;
+        const range = sel.getRangeAt(0);
+        if (docEditableRef.current.contains(range.commonAncestorContainer)) {
+            savedDocSelectionRef.current = { range: range.cloneRange() };
+        }
+    };
+
+    const handleDeletePage = (e) => {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        if (totalPages <= 1) return;
+        try {
+            saveContainerToPage(page);
+            const byPage = pdfByPageRef.current;
+            for (let p = page; p < totalPages; p++) {
+                byPage[p] = byPage[p + 1] || [];
+            }
+            delete byPage[totalPages];
+            pdfByPageRef.current = { ...byPage };
+        } catch (_) {}
+        deletePage(true);
+    };
+
+    // Per-page PDF storage: each whiteboard page can have its own PDF; we swap DOM nodes on page change so adding a PDF on page 2 doesn't remove the one on page 1
+    const pdfOnPageRef = useRef(1);
+    const pdfByPageRef = useRef({});
+    const saveContainerToPage = (pageNum) => {
+        const container = pdfContainerRef.current;
+        if (!container) return;
+        const nodes = [];
+        while (container.firstChild) nodes.push(container.removeChild(container.firstChild));
+        pdfByPageRef.current[pageNum] = nodes;
+    };
+    const restoreContainerFromPage = (pageNum) => {
+        const container = pdfContainerRef.current;
+        if (!container) return;
+        const nodes = pdfByPageRef.current[pageNum];
+        if (nodes && nodes.length) nodes.forEach(n => container.appendChild(n));
+    };
+    useEffect(() => {
+        const container = pdfContainerRef.current;
+        if (!container) return;
+        const oldPage = pdfOnPageRef.current;
+        if (oldPage === page) return;
+        saveContainerToPage(oldPage);
+        pdfOnPageRef.current = page;
+        restoreContainerFromPage(page);
+    }, [page]);
+
+    // Focus text input when text tool creates a new box so user can type immediately
+    useEffect(() => {
+        if (activeText) {
+            const t = setTimeout(() => textInputRef.current?.focus(), 50);
+            return () => clearTimeout(t);
+        }
+    }, [activeText?.x, activeText?.y]);
+
+    // Helper to generate IDs
+    const uuid = () => Math.random().toString(36).substr(2, 9);
+
+    // Chunking State
+    const pdfChunksRef = useRef({}); // { [fileId]: { [index]: data, total: N, metadata: {...} } }
+
+    // Recipient Logic for PDF Sync & Chunks
+    useEffect(() => {
+        if (!connection) return;
+
+        const processChunk = (data) => {
+            const { fileId, chunkIndex, totalChunks, chunkData, metadata } = data;
+
+            if (!pdfChunksRef.current[fileId]) {
+                pdfChunksRef.current[fileId] = { parts: new Array(totalChunks), count: 0, metadata };
+            }
+
+            const fileTransfer = pdfChunksRef.current[fileId];
+            fileTransfer.parts[chunkIndex] = chunkData;
+            fileTransfer.count++;
+
+            if (fileTransfer.count === totalChunks) {
+                // Reassembly
+                const fullData = fileTransfer.parts.join('');
+                delete pdfChunksRef.current[fileId]; // Cleanup
+
+                if (metadata.type === 'pdf_page') {
+                    renderRemotePDFPage(fullData, metadata);
+                } else if (metadata.type === 'sync_pdf_page') {
+                    const pageNum = metadata.pageNum != null ? parseInt(metadata.pageNum, 10) : 1;
+                    if (!pdfByPageRef.current[pageNum]) pdfByPageRef.current[pageNum] = [];
+                    const img = document.createElement('img');
+                    img.src = fullData;
+                    img.style.position = 'absolute';
+                    img.style.top = `${metadata.y || 0}px`;
+                    img.style.left = '50px';
+                    img.style.width = `${metadata.width || 800}px`;
+                    img.style.boxShadow = '0 4px 6px -1px rgba(0,0,0,0.1)';
+                    img.style.borderRadius = '4px';
+                    pdfByPageRef.current[pageNum].push(img);
+                    const container = pdfContainerRef.current;
+                    if (container) {
+                        while (container.firstChild) container.removeChild(container.firstChild);
+                        (pdfByPageRef.current[page] || []).forEach(n => container.appendChild(n));
+                    }
+                }
+            }
+        };
+
+        const renderRemotePDFPage = (base64Image, meta) => {
+            try {
+                if (pdfContainerRef.current) {
+                    const img = document.createElement('img');
+                    img.src = base64Image;
+                    img.style.position = 'absolute';
+                    img.style.top = `${meta.y || 0}px`;
+                    img.style.left = '50px';
+                    img.style.width = `${meta.width || 800}px`;
+                    img.style.boxShadow = '0 4px 6px -1px rgba(0,0,0,0.1)';
+                    img.style.borderRadius = '4px';
+                    pdfContainerRef.current.appendChild(img);
+                }
+            } catch (err) {
+                console.error("Error rendering remote PDF page:", err);
+            }
+        };
+
+        const handleData = (data) => {
+            if (data.type === 'file_chunk') {
+                processChunk(data);
+            } else if (data.type === 'clear_pdf') {
+                if (pdfContainerRef.current) pdfContainerRef.current.innerHTML = '';
+                pdfByPageRef.current = {};
+            }
+            // Legacy handling or small messages can go here
+        };
+
+        connection.on('data', handleData);
+        return () => connection.off('data', handleData);
+    }, [connection, page]);
+
+    // Host: when peer joins (or reconnects after refresh), send all current PDF pages
+    const sendAllPdfPagesRef = useRef(null);
+    useEffect(() => {
+        if (!connection || !isHost) return;
+        const sendAllPdfPages = async () => {
+            const byPage = pdfByPageRef.current;
+            for (const [pageNum, nodes] of Object.entries(byPage)) {
+                if (!Array.isArray(nodes) || nodes.length === 0) continue;
+                for (const node of nodes) {
+                    try {
+                        let dataUrl;
+                        if (node.tagName === 'CANVAS') dataUrl = node.toDataURL('image/png');
+                        else if (node.tagName === 'IMG' && node.src) dataUrl = node.src;
+                        if (dataUrl && connection.open) await sendLargeData('sync_pdf_page', dataUrl, { pageNum: parseInt(pageNum, 10), y: parseInt(node.style?.top, 10) || 0, width: node.width || node.offsetWidth || 800, height: node.height || node.offsetHeight || 600 });
+                    } catch (_) {}
+                }
+            }
+        };
+        sendAllPdfPagesRef.current = sendAllPdfPages;
+        const onOpen = () => setTimeout(sendAllPdfPages, 800);
+        if (connection.open) onOpen();
+        connection.on('open', onOpen);
+        return () => { connection.off('open', onOpen); };
+    }, [connection, isHost]);
+
+    // Host: respond to student request for PDF sync (e.g. after student refresh)
+    useEffect(() => {
+        if (!connection || !isHost) return;
+        const onData = (data) => {
+            if (data.type === 'request_pdf_sync' && sendAllPdfPagesRef.current) setTimeout(sendAllPdfPagesRef.current, 300);
+        };
+        connection.on('data', onData);
+        return () => connection.off('data', onData);
+    }, [connection, isHost]);
+
+    // Student: when connection is open, request PDF sync from host so PDF persists after refresh
+    useEffect(() => {
+        if (!connection || isHost || !connection.open) return;
+        const t = setTimeout(() => {
+            if (connection.open) connection.send({ type: 'request_pdf_sync' });
+        }, 1200);
+        return () => clearTimeout(t);
+    }, [connection, isHost, connection?.open]);
+
+    const sendLargeData = async (type, payload, metadata = {}) => {
+        if (!connection || !connection.open) return;
+
+        const fileId = uuid();
+        const jsonString = JSON.stringify(payload); // Actually payload is likely the base64 string itself
+        // If payload is base64 string
+        const dataString = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+        const CHUNK_SIZE = 16000; // Safe limit
+        const totalChunks = Math.ceil(dataString.length / CHUNK_SIZE);
+
+        for (let i = 0; i < totalChunks; i++) {
+            const chunk = dataString.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+            connection.send({
+                type: 'file_chunk',
+                fileId,
+                chunkIndex: i,
+                totalChunks,
+                chunkData: chunk,
+                metadata: { ...metadata, type }
+            });
+            // Small delay to prevent flood
+            await new Promise(r => setTimeout(r, 5));
+        }
+    };
+
     const handleUpload = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
+        saveContainerToPage(pdfOnPageRef.current);
+        pdfOnPageRef.current = page;
+
+        // Broadcast Clear
+        if (connection && connection.open) {
+            connection.send({ type: 'clear_pdf' });
+        }
 
         const reader = new FileReader();
         reader.onload = async (ev) => {
@@ -155,7 +494,6 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
 
                 // Progressive Rendering Loop
                 for (let i = 1; i <= pdf.numPages; i++) {
-                    // Small delay to let UI breathe
                     await new Promise(r => setTimeout(r, 10));
 
                     const page = await pdf.getPage(i);
@@ -172,25 +510,31 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
 
                     pdfContainerRef.current.appendChild(cvs);
 
-                    // Render
                     await page.render({ canvasContext: cvs.getContext('2d'), viewport }).promise;
+
+                    // Broadcast Page via Chunks
+                    if (connection && connection.open) {
+                        const dataUrl = cvs.toDataURL('image/jpeg', 0.6); // Lower quality for speed
+                        await sendLargeData('pdf_page', dataUrl, {
+                            y: yOffset,
+                            width: viewport.width,
+                            height: viewport.height
+                        });
+                    }
 
                     yOffset += viewport.height + 40;
                     maxWidth = Math.max(maxWidth, viewport.width + 100);
                     page.cleanup();
                 }
 
-                // Resize main canvas to fit all pages
-                const ctx = canvasRef.current.getContext('2d');
-                // We need to preserve existing drawing
-                const imgData = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
-
-                canvasRef.current.width = Math.max(window.innerWidth * 2, maxWidth);
-                canvasRef.current.height = Math.max(yOffset + 1000, window.innerHeight * 3);
-
-                ctx.putImageData(imgData, 0, 0);
+                // Do NOT resize the main drawing canvas. Keeping it at 2500x2500 avoids
+                // toDataURL() freezing the tab when changing/adding pages (savePage/loadPage).
+                // The PDF stays in the overlay; user pans/zooms to view it.
                 setTransform({ x: 0, y: 0, scale: 1 });
 
+                if (pdfContainerRef.current) {
+                    pdfContainerRef.current.style.display = '';
+                }
             } catch (err) {
                 console.error("PDF Load Error", err);
                 alert("Failed to load PDF. Please try another file.");
@@ -199,25 +543,107 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
         reader.readAsArrayBuffer(file);
     };
 
-    const handleExportPDF = () => {
+    const handleExportPDF = async () => {
+        if (isDocumentPage && docEditableRef.current) {
+            try {
+                const source = docEditableRef.current;
+                const scale = 2;
+                const baseW = 595;
+                const baseH = 842;
+                const temp = document.createElement('div');
+                temp.style.cssText = `position:fixed;left:-9999px;top:0;width:${baseW}px;min-height:${baseH}px;background:#fff;padding:48px;font-family:Georgia,'Times New Roman',serif;font-size:14px;line-height:1.6;color:#1a1a1a;box-sizing:border-box;`;
+                temp.innerHTML = source.innerHTML || '<p></p>';
+                document.body.appendChild(temp);
+                await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                const can = await html2canvas(temp, { scale, logging: false, backgroundColor: '#ffffff', useCORS: false });
+                document.body.removeChild(temp);
+                const w = can.width;
+                const h = Math.max(can.height, 200);
+                const imgData = can.toDataURL('image/png', 1.0);
+                const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+                const pdfW = pdf.internal.pageSize.getWidth();
+                const pdfH = pdf.internal.pageSize.getHeight();
+                const imgAspect = w / h;
+                const fitW = imgAspect > pdfW / pdfH ? pdfW : pdfH * imgAspect;
+                const fitH = imgAspect > pdfW / pdfH ? pdfW / imgAspect : pdfH;
+                pdf.addImage(imgData, 'PNG', 0, 0, fitW, fitH);
+                pdf.save("davina-tutoring-notes.pdf");
+            } catch (err) {
+                console.error('Document PDF export failed:', err);
+                try {
+                    const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+                    const text = docEditableRef.current?.innerText || docEditableRef.current?.textContent || '';
+                    pdf.setFontSize(11);
+                    const lines = pdf.splitTextToSize(text || '(No content)', pdf.internal.pageSize.getWidth() - 80);
+                    pdf.text(lines, 40, 40);
+                    pdf.save("davina-tutoring-notes.pdf");
+                } catch (e2) {
+                    console.error('Fallback PDF failed:', e2);
+                    alert('Could not export document as PDF. Please try again.');
+                }
+            }
+            return;
+        }
         if (!canvasRef.current) return;
+        const canvas = canvasRef.current;
+        const cw = canvas.width;
+        const ch = canvas.height;
+        const container = pdfContainerRef.current;
+        const nodes = (container && container.children && container.children.length > 0)
+            ? Array.from(container.children)
+            : (pdfByPageRef.current[page] || []);
+        let nodeMaxX = cw, nodeMaxY = ch;
+        nodes.forEach(node => {
+            const left = parseInt(String(node.style?.left || 50).replace(/px/g, ''), 10) || 50;
+            const top = parseInt(String(node.style?.top || 0).replace(/px/g, ''), 10) || 0;
+            const w = node.tagName === 'CANVAS' ? node.width : (node.naturalWidth || node.offsetWidth || 800);
+            const h = node.tagName === 'CANVAS' ? node.height : (node.naturalHeight || node.offsetHeight || 600);
+            nodeMaxX = Math.max(nodeMaxX, left + w);
+            nodeMaxY = Math.max(nodeMaxY, top + h);
+        });
+        const outW = Math.ceil(nodeMaxX) || cw;
+        const outH = Math.ceil(nodeMaxY) || ch;
+        const off = document.createElement('canvas');
+        off.width = outW;
+        off.height = outH;
+        const ctx = off.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, outW, outH);
+        ctx.drawImage(canvas, 0, 0, cw, ch, 0, 0, cw, ch);
+        nodes.forEach(node => {
+            const left = parseInt(String(node.style?.left || 50).replace(/px/g, ''), 10) || 50;
+            const top = parseInt(String(node.style?.top || 0).replace(/px/g, ''), 10) || 0;
+            if (left + (node.tagName === 'CANVAS' ? node.width : node.naturalWidth || 800) < 0 || top + (node.tagName === 'CANVAS' ? node.height : node.naturalHeight || 600) < 0) return;
+            if (node.tagName === 'CANVAS') {
+                try { ctx.drawImage(node, left, top, node.width, node.height); } catch (_) {}
+            } else if (node.tagName === 'IMG' && node.complete) {
+                const ww = node.naturalWidth || node.offsetWidth || 800;
+                const hh = node.naturalHeight || node.offsetHeight || 600;
+                try { ctx.drawImage(node, left, top, ww, hh); } catch (_) {}
+            }
+        });
+        const imgData = off.toDataURL('image/png');
+        const pdf = new jsPDF({ orientation: outW > outH ? 'landscape' : 'portrait', unit: 'px', format: [outW, outH] });
+        pdf.addImage(imgData, 'PNG', 0, 0, outW, outH);
+        pdf.save("davina-tutoring-notes.pdf");
+    };
 
-        // Simple export of the current view/canvas
-        // For a full multi-page PDF export, we'd need more complex logic iterating pages
-        // For now, let's export the current canvas state
+    const getLessonPDFBase64 = () => {
+        if (!canvasRef.current) return Promise.resolve(null);
         const canvas = canvasRef.current;
         const imgData = canvas.toDataURL('image/png');
-
         const pdf = new jsPDF({
             orientation: 'landscape',
             unit: 'px',
             format: [canvas.width, canvas.height]
         });
-
         pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
-        pdf.save("davina-tutoring-notes.pdf");
-        pdf.save("davina-tutoring-notes.pdf");
+        const dataUri = pdf.output('datauristring');
+        const base64 = dataUri && dataUri.includes(',') ? dataUri.split(',')[1] : null;
+        return Promise.resolve(base64);
     };
+
+    useImperativeHandle(ref, () => ({ getLessonPDFBase64 }), []);
 
 
     // --- Recording Logic ---
@@ -323,14 +749,24 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
             />
 
             {/* Header / Banner */}
-            <div className="h-14 bg-purple-600 text-white flex items-center justify-between px-6 shadow-md z-30">
-                <div className="flex items-center gap-3">
-                    <GraduationCap size={28} className="text-white" />
-                    <h1 className="text-xl font-bold tracking-wide">Davina's Tutoring</h1>
+            <div className="h-14 bg-purple-600 text-white flex items-center justify-between px-6 shadow-md z-30 shrink-0">
+                <div className="flex items-center gap-4 flex-wrap">
+                    <GraduationCap size={28} className="text-white shrink-0" />
+                    <h1 className="text-xl font-bold tracking-wide shrink-0">Davina's Tutoring</h1>
+                    {sessionId && (
+                        <div className="flex items-center gap-2 bg-white/15 rounded-lg px-3 py-1.5">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-white/90">Meeting ID</span>
+                            <span className="font-mono text-sm select-all">{sessionId}</span>
+                        </div>
+                    )}
+                    <span className="text-white/80 text-sm">
+                        {studentName && studentName !== 'Guest' ? studentName : (typeof window !== 'undefined' && sessionId ? (localStorage.getItem(`session_student_${sessionId}`) || studentName || 'Student') : (studentName || 'Student'))}
+                    </span>
                 </div>
 
-                {/* Central Timer */}
-                <div className={`flex items-center gap-2 font-mono text-lg font-bold px-4 py-1 rounded-full ${isOvertime ? 'bg-red-500 animate-pulse' : 'bg-white/10'}`}>
+                {/* 60-minute timer - always visible when showLessonTimer */}
+                {showLessonTimer && (
+                <div className={`flex items-center gap-2 font-mono text-lg font-bold px-4 py-1.5 rounded-full shrink-0 ${isOvertime ? 'bg-red-500 animate-pulse' : 'bg-white/10'}`}>
                     <Clock size={16} />
                     <span>{isOvertime ? '+' : ''}{formatTime(timeLeft)}</span>
                     {isHost && (
@@ -344,37 +780,7 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
                     )}
                     {isOvertime && <span className="text-xs ml-1">OVERTIME</span>}
                 </div>
-                {/* Header / Toolbar Info */}
-                <div className="absolute top-20 left-24 flex items-center gap-4 z-30 pointer-events-auto">
-                    <div className="bg-white/90 backdrop-blur shadow-sm px-4 py-2 rounded-xl flex items-center gap-4 text-brand-navy">
-
-                        {/* Session Info */}
-                        <div className="flex flex-col leading-tight border-r border-gray-200 pr-4 mr-2">
-                            <span className="text-xs text-gray-400 font-bold uppercase tracking-wider">Student</span>
-                            <span className="font-bold text-purple-700">{studentName}</span>
-                        </div>
-                        <div className="flex flex-col leading-tight mr-4">
-                            <span className="text-xs text-gray-400 font-bold uppercase tracking-wider">Meeting ID</span>
-                            <span className="font-mono text-gray-600 select-all">{sessionId}</span>
-                        </div>
-
-                        {/* Timer */}
-                        <div className="flex items-center gap-2 bg-brand-navy text-white px-3 py-1.5 rounded-lg font-mono font-bold">
-                            <Clock size={16} />
-                            <span>{isOvertime ? '+' : ''}{formatTime(timeLeft)}</span>
-                            {isHost && (
-                                <button
-                                    onClick={toggleTimer}
-                                    className="ml-2 bg-white/20 hover:bg-white/40 p-1 rounded-full text-xs"
-                                    title={isTimerRunning ? "Pause Timer" : "Start Timer"}
-                                >
-                                    {isTimerRunning ? '⏸' : '▶'}
-                                </button>
-                            )}
-                            {isOvertime && <span className="text-xs ml-1">OVERTIME</span>}
-                        </div>
-                    </div>
-                </div>
+                )}
 
                 <div className="flex items-center gap-4">
                     <button
@@ -385,15 +791,15 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
                         <span>Notes</span>
                     </button>
                     <button
-                        onClick={() => setShowPricing(true)}
-                        className="flex items-center gap-2 hover:text-purple-200 transition-colors"
-                    >
-                        <PoundSterling size={18} />
-                        <span>Pricing</span>
-                    </button>
-                    <button
-                        onClick={handleExportPDF}
-                        className="flex items-center gap-2 bg-white text-purple-700 px-3 py-1.5 rounded-full font-bold hover:bg-gray-100 transition-all"
+                        onClick={() => {
+                            requestAnimationFrame(() => {
+                                requestAnimationFrame(() => {
+                                    setTimeout(() => handleExportPDF(), 100);
+                                });
+                            });
+                        }}
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-full font-bold bg-white text-purple-700 hover:bg-purple-50 transition-all"
+                        title="Download whiteboard as PDF (includes pen and text)"
                     >
                         <Download size={16} />
                         <span>PDF</span>
@@ -439,59 +845,28 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
                 </div>
             </div>
 
-            {/* Pricing Modal */}
-            {showPricing && (
-                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm" onClick={() => setShowPricing(false)}>
-                    <div className="bg-white text-brand-navy p-8 rounded-2xl shadow-2xl max-w-md w-full relative" onClick={e => e.stopPropagation()}>
-                        <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
-                            <PoundSterling className="text-purple-600" /> Pricing Plans
-                        </h2>
-                        <div className="space-y-4">
-                            {/* Option 1 */}
-                            <div className="p-4 border border-gray-200 rounded-xl hover:border-purple-600 transition-colors cursor-pointer relative overflow-hidden">
-                                <h3 className="font-bold text-lg">1-on-1 Session</h3>
-                                <p className="text-gray-500">60 minutes personalized tutoring</p>
-                                <p className="text-purple-600 font-bold text-xl mt-2">£30<span className="text-sm text-gray-400">/hr</span></p>
-                            </div>
-
-                            {/* Option 2 */}
-                            <div className="p-4 border-2 border-purple-100 rounded-xl hover:border-purple-600 transition-colors cursor-pointer bg-purple-50 relative">
-                                <div className="absolute top-0 right-0 bg-purple-600 text-white text-xs font-bold px-2 py-1 rounded-bl-lg">
-                                    Save £20
-                                </div>
-                                <h3 className="font-bold text-lg">Bundle (10 Sessions)</h3>
-                                <p className="text-gray-500">Commit to success & save</p>
-                                <p className="text-purple-600 font-bold text-xl mt-2">£280<span className="text-sm text-gray-400"> total</span></p>
-                            </div>
-                        </div>
-
-                        {/* Payment Options */}
-                        <div className="mt-6 bg-gray-50 p-4 rounded-xl border border-gray-200 text-sm text-center">
-                            <p className="font-bold text-gray-700 mb-3">Ready to start?</p>
-                            <button
-                                onClick={() => {
-                                    if (window.confirm('Redirect to secure Open Banking payment?')) {
-                                        setTimeout(() => {
-                                            alert('Redirecting to your Bank...\nPayment Authorized!');
-                                        }, 1000);
-                                    }
-                                }}
-                                className="bg-teal-600 hover:bg-teal-700 text-white px-6 py-3 rounded-lg font-bold shadow-md transition-all flex items-center justify-center gap-2 mx-auto"
-                            >
-                                <span className="text-lg">💳</span> Pay via Open Banking
+            {/* Page strip under purple bar: not covered by content */}
+            <div className="h-12 bg-white border-b border-gray-200 flex items-center justify-between px-4 gap-4 z-[25] relative shrink-0">
+                <div className="flex items-center gap-2">
+                    <button onClick={prevPage} disabled={page === 1} className="w-8 h-8 flex items-center justify-center text-gray-500 hover:text-purple-600 disabled:opacity-30 rounded border border-gray-200 hover:border-purple-300">←</button>
+                    <span className="text-sm font-bold text-gray-700 min-w-[4rem] text-center">{page} / {totalPages}</span>
+                    <button onClick={nextPage} disabled={page === totalPages} className="w-8 h-8 flex items-center justify-center text-gray-500 hover:text-purple-600 disabled:opacity-30 rounded border border-gray-200 hover:border-purple-300">→</button>
+                    <div className="relative">
+                    <button onClick={() => setShowAddPageMenu(!showAddPageMenu)} className="px-3 py-1.5 text-sm font-bold text-teal-600 border-2 border-teal-500 rounded-lg hover:bg-teal-50">+ Page</button>
+                    {showAddPageMenu && (
+                        <div className="absolute top-full left-0 mt-1 py-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[140px]">
+                            <button onClick={() => { addPage('whiteboard'); setShowAddPageMenu(false); }} className="w-full px-3 py-2 text-left text-sm font-bold text-gray-800 hover:bg-teal-50 rounded-t-lg flex items-center gap-2">
+                                <FileText size={14} /> Whiteboard
                             </button>
-                            <p className="text-gray-400 text-xs mt-2">Secure bank transfer</p>
+                            <button onClick={() => { addPage('document'); setShowAddPageMenu(false); }} className="w-full px-3 py-2 text-left text-sm font-bold text-gray-800 hover:bg-teal-50 rounded-b-lg flex items-center gap-2">
+                                <FileText size={14} /> Document
+                            </button>
                         </div>
-
-                        <button
-                            onClick={() => setShowPricing(false)}
-                            className="mt-6 w-full py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
-                        >
-                            Close
-                        </button>
-                    </div>
+                    )}
                 </div>
-            )}
+                    <button type="button" onClick={handleDeletePage} disabled={totalPages <= 1} className="px-3 py-1.5 text-sm font-bold text-red-500 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed" title="Delete this page">Delete page</button>
+                </div>
+            </div>
 
             <div className="flex-1 flex overflow-hidden relative">
                 <Toolbar
@@ -503,32 +878,71 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
                     onZoomOut={zoomOut}
                     gridMode={gridMode}
                     setGridMode={setGridMode}
-
                     page={page}
                     totalPages={totalPages}
                     onPrevPage={prevPage}
                     onNextPage={nextPage}
-                    onAddPage={addPage}
+                    onAddPage={() => setShowAddPageMenu(true)}
+                    onDeletePage={handleDeletePage}
                     onClear={clearCanvas}
-
                     onUndo={undo}
                     onRedo={redo}
+                    isDocumentPage={isDocumentPage}
+                    onDocHighlight={(c) => applyDocFormat('backColor', c)}
+                    onDocTextColor={(c) => applyDocFormat('foreColor', c)}
+                    onDocHighlightPopoverOpen={saveDocSelection}
+                    onDocSaveSelection={saveDocSelection}
                 />
 
                 <div
                     ref={viewportRef}
-                    className={`flex-1 relative overflow-hidden touch-none 
-                        ${gridMode ? 'bg-grid bg-white' : 'bg-sky-50'} 
-                        ${tool === 'pan' ? 'cursor-grab active:cursor-grabbing' : 'cursor-none'} 
-                    `}
-                    {...events}
-                    onMouseMove={(e) => {
+                    className={`flex-1 relative overflow-hidden touch-none ${!isDocumentPage && gridMode ? 'bg-grid' : ''} ${!isDocumentPage && tool !== 'pan' ? 'cursor-none' : ''}`}
+                    style={{
+                        backgroundColor: '#ffffff',
+                        ...(!isDocumentPage && tool === 'pan' ? {
+                            cursor: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='6' fill='%23000'/%3E%3C/svg%3E") 12 12, grab`
+                        } : {})
+                    }}
+                    {...(isDocumentPage ? {} : events)}
+                    onMouseMove={isDocumentPage ? undefined : (e) => {
                         updateCursor(e);
                         if (events.onMouseMove) events.onMouseMove(e);
                     }}
                     onMouseEnter={() => setShowCursor(true)}
                     onMouseLeave={() => setShowCursor(false)}
                 >
+                    {isDocumentPage ? (
+                        <div className="absolute inset-0 overflow-auto bg-gray-300 pt-24 pb-24 px-4">
+                            <div className="flex flex-col items-center min-h-full min-w-full pt-12 pb-12">
+                            <div className="flex items-center justify-center min-h-full min-w-full" style={{ transform: 'scale(1.55)', transformOrigin: 'center top' }}>
+                                <div data-doc-sheet className="w-[210mm] min-h-[297mm] bg-white shadow-xl rounded-sm flex flex-col flex-shrink-0" style={{ boxShadow: '0 0 0 1px rgba(0,0,0,0.08), 0 4px 20px rgba(0,0,0,0.15)' }}>
+                                    <div className="flex-1 flex flex-col p-12 pt-16">
+                                        <div
+                                            ref={docEditableRef}
+                                            className="flex-1 w-full min-h-[200px] border-0 outline-none font-sans text-gray-800 text-base leading-relaxed focus:outline-none overflow-auto empty:before:content-[attr(data-placeholder)] empty:before:text-gray-400"
+                                            contentEditable
+                                            suppressContentEditableWarning
+                                            data-placeholder="Type here — this page supports text colour and highlight."
+                                            style={{ outline: 'none' }}
+                                            onBlur={(e) => {
+                                                saveDocSelection();
+                                                const html = e.currentTarget.innerHTML;
+                                                setDocumentContent(html);
+                                                setDocContent(page, html);
+                                            }}
+                                            onInput={(e) => {
+                                                const html = e.currentTarget.innerHTML;
+                                                setDocumentContent(html);
+                                                setDocContent(page, html);
+                                            }}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                            </div>
+                        </div>
+                    ) : (
+                    <>
                     <div
                         style={{
                             transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
@@ -539,9 +953,9 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
                         }}
                     >
                         <div ref={pdfContainerRef} className="absolute inset-0 pointer-events-none"></div>
-                        <canvas ref={canvasRef} className="relative z-10 pointer-events-none" />
+                        <canvas ref={canvasRef} className="relative z-10 pointer-events-none" style={{ background: 'transparent' }} />
 
-                        {/* Active Text Input */}
+                        {/* Active Text Input - auto-focus so user can type immediately */}
                         {activeText && (
                             <div
                                 style={{
@@ -571,6 +985,7 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
                                     Drag me
                                 </div>
                                 <input
+                                    ref={textInputRef}
                                     autoFocus
                                     value={activeText.text}
                                     onChange={(e) => setActiveText({ ...activeText, text: e.target.value })}
@@ -609,7 +1024,8 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
                     <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-brand-navy/50 text-xs pointer-events-none select-none font-bold">
                         [Scroll] to Pan Vertical • [Ctrl+Scroll] to Zoom
                     </div>
-                </div>
+                    </>
+                    )}
 
                 {/* Notes Modal - Centered & Floating */}
                 {showNotes && (
@@ -639,9 +1055,10 @@ const Whiteboard = ({ connection, isHost, sessionId, studentName, onEndLesson })
                         </div>
                     </div>
                 )}
+                </div>
             </div>
         </div>
     );
-};
+});
 
 export default Whiteboard;

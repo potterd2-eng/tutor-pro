@@ -2,14 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 // Removed react-calendly to avoid install issues
 import {
-    Calendar, CheckCircle, ChevronDown, ChevronRight, Clock, Copy, CreditCard,
+    Calendar, CheckCircle, ChevronDown, ChevronRight, ChevronUp, Clock, Copy, CreditCard,
     Facebook, GraduationCap, Instagram, Linkedin, LogIn, Mail, Menu, MessageSquare,
     Phone, Star, Twitter, User, Users, Video, X, BookOpen, Shield, ArrowRight, Calculator, Brain
 } from 'lucide-react';
 import CryptoJS from 'crypto-js';
 import profilePic from '../assets/profile.jpg'; // Import profile picture
 import { emailService } from '../utils/email';
-import { dataService } from '../services/dataService';
+import dataService from '../services/dataService';
 import { generateGoogleCalendarUrl } from '../utils/calendar';
 
 const formatName = (name) => {
@@ -138,6 +138,7 @@ const LandingPage = () => {
     const [showBookingDropdown, setShowBookingDropdown] = useState(false);
     const [showStudentBookingModal, setShowStudentBookingModal] = useState(false);
     const [studentModalTab, setStudentModalTab] = useState('existing'); // 'new' or 'existing'
+    const [isStudentSigningIn, setIsStudentSigningIn] = useState(false);
     const [showForgotPinModal, setShowForgotPinModal] = useState(false);
     const [showParentLoginModal, setShowParentLoginModal] = useState(false);
     const [parentLoginStep, setParentLoginStep] = useState('email'); // 'email', 'createPin', 'enterPin'
@@ -201,7 +202,7 @@ const LandingPage = () => {
         setConsultationStep('who-are-you');
     };
 
-    const finalizeBooking = (userType, userDetails) => {
+    const finalizeBooking = async (userType, userDetails) => {
         if (!pendingBooking) return;
 
         const bookingId = 'consult-' + Date.now().toString(36);
@@ -233,17 +234,19 @@ const LandingPage = () => {
             parentId: userDetails.parentId
         };
 
-        const bookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
-        bookings.push(newBooking);
-        localStorage.setItem('tutor_bookings', JSON.stringify(bookings));
-        window.dispatchEvent(new Event('storage'));
+        try {
+            await dataService.createBooking(newBooking);
 
-        // Send Emails
-        emailService.sendConfirmation({ ...newBooking, link: meetingLink }).catch(err => console.error(err));
-        emailService.sendTeacherNotification(newBooking).catch(err => console.error(err));
+            // Send Emails (Non-blocking)
+            emailService.sendConfirmation({ ...newBooking, link: meetingLink }).catch(err => console.error("Email error:", err));
+            emailService.sendTeacherNotification(newBooking).catch(err => console.error("Email notification error:", err));
 
-        setPendingBooking(null);
-        setNotification({ type: 'success', message: 'Booking Confirmed! You can now view it in your dashboard.' });
+            setPendingBooking(null);
+            setNotification({ type: 'success', message: 'Booking Confirmed! You can now view it in your dashboard.' });
+        } catch (error) {
+            console.error("Booking creation failed:", error);
+            setNotification({ type: 'error', message: 'Failed to create booking. Please checks your connection and try again.' });
+        }
     };
 
     // Load Calendly Script
@@ -1079,18 +1082,25 @@ const LandingPage = () => {
                                 </button>
                             </div>
 
-                            <form onSubmit={(e) => {
+                            <form onSubmit={async (e) => {
                                 e.preventDefault();
+                                setIsStudentSigningIn(true);
+                                try {
                                 const formData = new FormData(e.target);
-                                const name = formData.get('name'); // Moved name here
-                                const pin = formData.get('pin');
+                                const name = (formData.get('name') || '').toString().trim();
+                                const pin = (formData.get('pin') || '').toString().trim();
                                 const email = formData.get('email'); // Only for new
                                 const subject = formData.get('subject'); // Add subject
 
-                                const existingStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
+                                const existingStudents = await dataService.getStudents();
 
                                 if (studentModalTab === 'existing') {
                                     // Login Logic
+                                    if (!name) {
+                                        setNotification({ type: 'error', message: 'Please enter your name.' });
+                                        setIsStudentSigningIn(false);
+                                        return;
+                                    }
                                     const student = existingStudents.find(s => s.name.toLowerCase() === name.toLowerCase());
                                     if (student) {
                                         // Check if student name is Sarah and PIN is 1234 (explicit request)
@@ -1099,21 +1109,32 @@ const LandingPage = () => {
                                                 finalizeBooking('student', student);
                                             }
                                             setShowStudentBookingModal(false);
-                                            navigate(`/student/${encodeURIComponent(student.name)}`);
+                                            setIsStudentSigningIn(false);
+                                            setTimeout(() => navigate(`/student/${encodeURIComponent(student.name)}`), 0);
                                             return;
                                         }
 
-                                        const hashedInput = CryptoJS.SHA256(pin).toString();
-                                        if (student.pin === hashedInput || student.pin === pin) {
+                                        const pinsMap = JSON.parse(localStorage.getItem('tutor_student_pins') || '{}');
+                                        const storedPin = student.pin || pinsMap[student.id] || (() => {
+                                            const localStudents = JSON.parse(localStorage.getItem('tutor_students') || '[]');
+                                            const byName = localStudents.find(s => s.name.toLowerCase() === name.toLowerCase());
+                                            return byName ? pinsMap[byName.id] : undefined;
+                                        })();
+                                        const hashedInput = pin ? CryptoJS.SHA256(pin).toString() : '';
+                                        const pinMatch = !storedPin || storedPin === hashedInput || storedPin === pin;
+                                        if (pinMatch) {
                                             if (pendingBooking) {
                                                 finalizeBooking('student', student);
                                             }
                                             setShowStudentBookingModal(false);
-                                            navigate(`/student/${encodeURIComponent(student.name)}`);
+                                            setIsStudentSigningIn(false);
+                                            setTimeout(() => navigate(`/student/${encodeURIComponent(student.name)}`), 0);
                                         } else {
+                                            setIsStudentSigningIn(false);
                                             setNotification({ type: 'error', message: 'Incorrect PIN.' });
                                         }
                                     } else {
+                                        setIsStudentSigningIn(false);
                                         setNotification({ type: 'error', message: 'Student not found. Please check your name or create a new account.' });
                                     }
                                 } else {
@@ -1168,10 +1189,9 @@ const LandingPage = () => {
                                         }
                                     }
 
-                                    const newStudent = {
-                                        id: Date.now(),
-                                        name: name,
-                                        email: email,
+                                    const payload = {
+                                        name: name.trim(),
+                                        email: email.trim(),
                                         parentEmail: isUnder16 ? parentEmail : null,
                                         parentId: parentId,
                                         isUnder16: isUnder16,
@@ -1183,29 +1203,60 @@ const LandingPage = () => {
                                         status: 'Active'
                                     };
 
-                                    // Link student to parent
+                                    let createdStudent;
+                                    try {
+                                        createdStudent = await dataService.createStudent({ name: payload.name, email: payload.email });
+                                    } catch (error) {
+                                        console.error("Student creation failed:", error);
+                                        const msg = error?.message || 'Failed to create account. Please try again.';
+                                        setNotification({ type: 'error', message: msg });
+                                        return;
+                                    }
+
+                                    // Store PIN and extras locally (DB may only have name/email)
+                                    const pins = JSON.parse(localStorage.getItem('tutor_student_pins') || '{}');
+                                    pins[createdStudent.id] = hashedPin;
+                                    localStorage.setItem('tutor_student_pins', JSON.stringify(pins));
+                                    const extras = JSON.parse(localStorage.getItem('tutor_student_extras') || '{}');
+                                    extras[createdStudent.id] = {
+                                        parentEmail: payload.parentEmail,
+                                        parentId: payload.parentId,
+                                        isUnder16: payload.isUnder16,
+                                        subject: payload.subject,
+                                        sessionsCompleted: payload.sessionsCompleted,
+                                        totalSpent: payload.totalSpent,
+                                        nextSession: payload.nextSession,
+                                        status: payload.status
+                                    };
+                                    localStorage.setItem('tutor_student_extras', JSON.stringify(extras));
+
+                                    // Link student to parent (use real id from backend)
                                     if (parentId) {
-                                        const parents = JSON.parse(localStorage.getItem('tutor_parents')) || [];
+                                        const parents = JSON.parse(localStorage.getItem('tutor_parents') || []);
                                         const parentIndex = parents.findIndex(p => p.id === parentId);
                                         if (parentIndex !== -1) {
-                                            if (!parents[parentIndex].linkedStudents.includes(newStudent.id)) {
-                                                parents[parentIndex].linkedStudents.push(newStudent.id);
+                                            if (!parents[parentIndex].linkedStudents.includes(createdStudent.id)) {
+                                                parents[parentIndex].linkedStudents.push(createdStudent.id);
                                             }
                                             localStorage.setItem('tutor_parents', JSON.stringify(parents));
                                         }
                                     }
 
-                                    const updatedStudents = [...existingStudents, newStudent];
-                                    localStorage.setItem('tutor_students', JSON.stringify(updatedStudents));
                                     window.dispatchEvent(new Event('storage'));
-                                    setShowStudentBookingModal(false);
-                                    setIsUnder16(null); // Reset age state
 
+                                    const studentForNav = { ...createdStudent, pin: hashedPin, ...extras[createdStudent.id] };
                                     if (pendingBooking) {
-                                        finalizeBooking('student', newStudent);
+                                        finalizeBooking('student', studentForNav);
                                     }
 
+                                    setShowStudentBookingModal(false);
+                                    setIsStudentSigningIn(false);
                                     navigate(`/student/${encodeURIComponent(name)}`);
+                                }
+                                } catch (err) {
+                                    console.error('Student form error', err);
+                                    setIsStudentSigningIn(false);
+                                    setNotification({ type: 'error', message: err?.message || 'Something went wrong. Please try again.' });
                                 }
                             }}>
                                 <div className="space-y-4">
@@ -1311,9 +1362,9 @@ const LandingPage = () => {
                                         <input
                                             type="password"
                                             name="pin"
-                                            required
+                                            required={studentModalTab === 'new'}
                                             maxLength="4"
-                                            pattern="[0-9]{4}"
+                                            pattern={studentModalTab === 'new' ? '[0-9]{4}' : undefined}
                                             placeholder="••••"
                                             className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none text-center text-2xl tracking-widest font-mono"
                                         />
@@ -1355,10 +1406,11 @@ const LandingPage = () => {
 
                                     <button
                                         type="submit"
-                                        className={`w-full py-3 text-white rounded-xl font-bold transition-all shadow-md hover:shadow-lg ${studentModalTab === 'new' ? 'bg-purple-600 hover:bg-purple-700' : 'bg-teal-500 hover:bg-teal-600'
+                                        disabled={isStudentSigningIn}
+                                        className={`w-full py-3 text-white rounded-xl font-bold transition-all shadow-md hover:shadow-lg disabled:opacity-70 disabled:cursor-wait ${studentModalTab === 'new' ? 'bg-purple-600 hover:bg-purple-700' : 'bg-teal-500 hover:bg-teal-600'
                                             }`}
                                     >
-                                        {studentModalTab === 'new' ? 'Create Account & Book' : 'Log In to Dashboard'}
+                                        {isStudentSigningIn ? 'Signing in…' : (studentModalTab === 'new' ? 'Create Account & Book' : 'Log In to Dashboard')}
                                     </button>
                                 </div>
                             </form>
@@ -1495,7 +1547,7 @@ const LandingPage = () => {
                         {loginType === 'new' ? (
                             <div className="space-y-4">
                                 <h2 className="text-2xl font-bold text-gray-900 text-center mb-6">Create Parent Account</h2>
-                                <form onSubmit={(e) => {
+                                <form onSubmit={async (e) => {
                                     e.preventDefault();
                                     const formData = new FormData(e.target);
                                     const parentName = formData.get('parentName');
@@ -1512,71 +1564,65 @@ const LandingPage = () => {
                                         return;
                                     }
 
-                                    // Create Parent
-                                    const newParent = {
-                                        id: Date.now(),
-                                        name: parentName,
-                                        email: email,
-                                        pin: pin,
-                                        linkedStudents: [],
-                                        createdAt: new Date().toISOString()
-                                    };
-
-                                    const existingStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
-                                    const existingStudent = existingStudents.find(s => s.name.toLowerCase() === studentName.toLowerCase());
-
-                                    let targetStudent;
-                                    let isNewStudent = false;
-
-                                    if (existingStudent) {
-                                        // Link to existing student
-                                        targetStudent = {
-                                            ...existingStudent,
-                                            parentId: newParent.id,
-                                            parentEmail: email
+                                    try {
+                                        const newParent = {
+                                            id: Date.now(),
+                                            name: parentName,
+                                            email: email,
+                                            pin: pin,
+                                            linkedStudents: [],
+                                            createdAt: new Date().toISOString()
                                         };
-                                        // Update in the list
-                                        const studentIndex = existingStudents.findIndex(s => s.id === existingStudent.id);
-                                        existingStudents[studentIndex] = targetStudent;
-                                    } else {
-                                        // Create Student
-                                        isNewStudent = true;
-                                        targetStudent = {
-                                            id: Date.now() + 1,
-                                            name: studentName,
-                                            email: email, // Parent email as contact
-                                            parentEmail: email,
-                                            parentId: newParent.id,
-                                            isUnder16: true, // Assumed for parent booking
-                                            pin: CryptoJS.SHA256('0000').toString(), // Default PIN for student, parent manages
-                                            subject: subject,
-                                            sessionsCompleted: 0,
-                                            totalSpent: 0,
-                                            nextSession: null,
-                                            status: 'Active'
-                                        };
-                                        existingStudents.push(targetStudent);
+
+                                        const existingStudents = await dataService.getStudents();
+                                        const existingStudent = existingStudents.find(s => s.name.toLowerCase() === studentName.trim().toLowerCase());
+
+                                        let targetStudent;
+
+                                        if (existingStudent) {
+                                            targetStudent = {
+                                                ...existingStudent,
+                                                parentId: newParent.id,
+                                                parentEmail: email
+                                            };
+                                            await dataService.updateStudent(targetStudent.id, { parentId: newParent.id, parentEmail: email });
+                                        } else {
+                                            targetStudent = {
+                                                id: (Date.now() + 1).toString(),
+                                                name: studentName.trim(),
+                                                email: email,
+                                                parentEmail: email,
+                                                parentId: newParent.id,
+                                                isUnder16: true,
+                                                pin: CryptoJS.SHA256('0000').toString(),
+                                                subject: subject,
+                                                sessionsCompleted: 0,
+                                                totalSpent: 0,
+                                                nextSession: null,
+                                                status: 'Active'
+                                            };
+                                            targetStudent = await dataService.createStudent(targetStudent);
+                                        }
+
+                                        newParent.linkedStudents.push(targetStudent.id);
+
+                                        existingParents.push(newParent);
+                                        localStorage.setItem('tutor_parents', JSON.stringify(existingParents));
+                                        window.dispatchEvent(new Event('storage'));
+
+                                        setParentAccount(newParent);
+                                        setShowParentLoginModal(false);
+
+                                        if (pendingBooking) {
+                                            finalizeBooking('parent', { ...newParent, name: targetStudent.name, id: targetStudent.id, parentId: newParent.id });
+                                        }
+
+                                        navigate(`/parent/${encodeURIComponent(email)}`);
+                                        setNotification({ type: 'success', message: 'Account created and booking confirmed!' });
+                                    } catch (err) {
+                                        console.error('Create parent account failed:', err);
+                                        setNotification({ type: 'error', message: 'Failed to create account. Please try again.' });
                                     }
-
-                                    newParent.linkedStudents.push(targetStudent.id);
-
-                                    // Save
-                                    existingParents.push(newParent);
-                                    localStorage.setItem('tutor_parents', JSON.stringify(existingParents));
-                                    localStorage.setItem('tutor_students', JSON.stringify(existingStudents));
-
-                                    window.dispatchEvent(new Event('storage'));
-
-                                    // Auto Login
-                                    setParentAccount(newParent);
-                                    setShowParentLoginModal(false);
-
-                                    if (pendingBooking) {
-                                        finalizeBooking('parent', { ...newParent, name: targetStudent.name, id: targetStudent.id, parentId: newParent.id });
-                                    }
-
-                                    navigate(`/parent/${encodeURIComponent(email)}`);
-                                    setNotification({ type: 'success', message: 'Account created and booking confirmed!' });
                                 }}>
                                     <div>
                                         <label className="block text-sm font-bold text-gray-700 mb-2">Parent Name</label>

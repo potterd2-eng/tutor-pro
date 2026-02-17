@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
     Clock, Calendar, Video, Star, CheckCircle, User, Users,
@@ -43,6 +43,24 @@ const ParentDashboard = () => {
     const [rescheduleTarget, setRescheduleTarget] = useState(null);
     const [bookingSubject, setBookingSubject] = useState('');
     const [cancelTarget, setCancelTarget] = useState(null);
+    const [editLessonSubjectTarget, setEditLessonSubjectTarget] = useState(null);
+    const [invoiceMonth, setInvoiceMonth] = useState(() => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    });
+    const PARENT_NOTE_KEY = 'tutor_parent_notes';
+    const [noteForTeacher, setNoteForTeacher] = useState('');
+    const [upcomingMonth, setUpcomingMonth] = useState(() => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    });
+    const [, setMsgTick] = useState(0);
+
+    useEffect(() => {
+        const onStorage = (e) => { if (e.key === 'chat_messages_v2') setMsgTick(t => t + 1); };
+        window.addEventListener('storage', onStorage);
+        return () => window.removeEventListener('storage', onStorage);
+    }, []);
 
     useEffect(() => {
         const loadParentData = () => {
@@ -76,8 +94,8 @@ const ParentDashboard = () => {
         const studentHistory = allHistory.filter(h =>
             h.studentId === selectedStudent.id ||
             h.studentName.toLowerCase() === selectedStudent.name.toLowerCase()
-        );
-        setSessionHistory(studentHistory.reverse());
+        ).sort((a, b) => new Date(a.date + 'T' + (a.time || '00:00')) - new Date(b.date + 'T' + (b.time || '00:00')));
+        setSessionHistory(studentHistory);
 
         const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
         const studentBookings = allBookings.filter(b =>
@@ -160,6 +178,20 @@ const ParentDashboard = () => {
         setBookingStep('select');
         setBookingType('single');
         setActiveTab('book');
+    };
+
+    const handleStartLesson = (lesson) => {
+        if (!selectedStudent) return;
+        const isPaid = lesson.paymentStatus?.toLowerCase() === 'paid';
+        const isException = lesson.paymentStatus === 'Due (Exception)';
+        const isInBundle = lesson.paymentStatus === 'In bundle';
+        const isFree = lesson.type === 'consultation';
+        if (!isPaid && !isException && !isInBundle && !isFree) {
+            setNotification({ type: 'error', message: 'Please pay for this lesson before starting. You can pay in the Invoices tab.' });
+            setActiveTab('invoices');
+            return;
+        }
+        navigate(`/session/${lesson.id}?student=${encodeURIComponent(selectedStudent.name)}`);
     };
 
     const handleParentCancel = (cancelSeries = false) => {
@@ -245,6 +277,33 @@ const ParentDashboard = () => {
         }
     }, [activeTab, parent]);
 
+    useEffect(() => {
+        const email = parent?.email || parentEmail || '';
+        if (!email) return;
+        try {
+            const raw = localStorage.getItem(PARENT_NOTE_KEY);
+            const o = raw ? JSON.parse(raw) : {};
+            setNoteForTeacher((o[email] && o[email].note) || '');
+        } catch (_) {}
+    }, [parent, parentEmail]);
+
+    const saveNoteForTeacher = (note) => {
+        const email = parent?.email || parentEmail || '';
+        if (!email) return;
+        try {
+            const raw = localStorage.getItem(PARENT_NOTE_KEY) || '{}';
+            const o = JSON.parse(raw);
+            o[email] = { note: note || '', updated: new Date().toISOString() };
+            localStorage.setItem(PARENT_NOTE_KEY, JSON.stringify(o));
+        } catch (_) {}
+    };
+    const noteDebounceRef = useRef(null);
+    useEffect(() => {
+        if (noteDebounceRef.current) clearTimeout(noteDebounceRef.current);
+        noteDebounceRef.current = setTimeout(() => { saveNoteForTeacher(noteForTeacher); }, 500);
+        return () => { if (noteDebounceRef.current) clearTimeout(noteDebounceRef.current); };
+    }, [noteForTeacher]);
+
     const handleSendMessage = () => {
         if (!newMessage.trim() || !parent) return;
 
@@ -273,12 +332,66 @@ const ParentDashboard = () => {
         emailService.sendMessageNotification(parent.name, 'davina.potter@outlook.com', sentContent);
     };
 
+    const getLessonRate = (item) => {
+        if (item.type === 'consultation') return 0;
+        if (item.cost != null && item.cost !== undefined) return Number(item.cost);
+        const level = getStudentLevel(selectedStudent, item.subject);
+        return level === 'A-Level' ? 40 : level === 'KS3' ? 25 : 30;
+    };
+    const getPackPrice = (subject) => {
+        const level = getStudentLevel(selectedStudent, subject);
+        return level === 'A-Level' ? 370 : level === 'KS3' ? 230 : 280;
+    };
     const calculateStats = () => {
         const completed = sessionHistory.length;
-        const unpaidInvoices = [...sessionHistory, ...upcomingLessons]
-            .filter(item => item.paymentStatus === 'Due' && item.type !== 'consultation' && item.cost !== 0)
-            .sort((a, b) => new Date(a.date) - new Date(b.date));
-        const totalDue = unpaidInvoices.reduce((sum, item) => sum + (item.cost || 0), 0);
+        const unpaidInvoices = [];
+        const seenPackIds = new Set();
+        const byRecurring = {};
+        upcomingLessons.forEach(b => {
+            if (b.recurringId) {
+                if (!byRecurring[b.recurringId]) byRecurring[b.recurringId] = [];
+                byRecurring[b.recurringId].push(b);
+            }
+        });
+        // One invoice per unpaid 10-lesson pack (so count matches packs, not individual lessons)
+        Object.keys(byRecurring).forEach(rid => {
+            const pack = byRecurring[rid].sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+            if (pack.length === 10) {
+                const first = pack[0];
+                if ((first.paymentStatus || '').toLowerCase() !== 'paid') {
+                    seenPackIds.add(rid);
+                    const amount = first.cost != null && first.cost !== undefined ? Number(first.cost) : getPackPrice(first.subject);
+                    unpaidInvoices.push({
+                        id: rid,
+                        subject: first.subject,
+                        cost: amount,
+                        date: first.date,
+                        paymentStatus: 'Due',
+                        type: 'pack',
+                        label: '10-lesson pack'
+                    });
+                }
+            }
+        });
+        // Single upcoming lessons (not part of a 10-pack we already invoiced)
+        upcomingLessons.forEach(item => {
+            if (item.type === 'consultation') return;
+            if (item.recurringId && seenPackIds.has(item.recurringId)) return;
+            if (!item.recurringId || !byRecurring[item.recurringId] || byRecurring[item.recurringId].length !== 10) {
+                if ((item.paymentStatus || '').toLowerCase() === 'due') {
+                    unpaidInvoices.push({ ...item, cost: getLessonRate(item) });
+                }
+            }
+        });
+        // Completed sessions still due
+        sessionHistory.forEach(item => {
+            if (item.type === 'consultation') return;
+            if ((item.paymentStatus || '').toLowerCase() === 'due') {
+                unpaidInvoices.push({ ...item, cost: getLessonRate(item) });
+            }
+        });
+        unpaidInvoices.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+        const totalDue = unpaidInvoices.reduce((sum, item) => sum + (Number(item.cost) || getLessonRate(item)), 0);
         const nextLesson = upcomingLessons.length > 0 ? upcomingLessons[0] : null;
         return { completed, unpaidCount: unpaidInvoices.length, totalDue, nextLesson, unpaidInvoices };
     };
@@ -426,9 +539,9 @@ const ParentDashboard = () => {
                                     href={(() => {
                                         const level = getStudentLevel(selectedStudent);
                                         if (stats.totalDue >= 280) {
-                                            return level === 'A-Level' ? "https://buy.stripe.com/5kA6oLe0Y6GHchG4gn" : "https://buy.stripe.com/eVqbJ1bUX1qnbVcdujeIw01";
+                                            return level === 'A-Level' ? "https://buy.stripe.com/5kA6oLe0Y6GHchG4gn" : (level === 'KS3' ? "https://buy.stripe.com/28EbJ17EHed97EW9e3eIw04" : "https://buy.stripe.com/eVqbJ1bUX1qnbVcdujeIw01");
                                         }
-                                        return level === 'A-Level' ? "https://buy.stripe.com/bJe9ATbUXed93oG4XNeIw03" : "https://buy.stripe.com/14A3cv5wzglh1gyai7eIw00";
+                                        return level === 'A-Level' ? "https://buy.stripe.com/bJe9ATbUXed93oG4XNeIw03" : (level === 'KS3' ? "https://buy.stripe.com/eVq4gz3or5GDbVccqfeIw05" : "https://buy.stripe.com/14A3cv5wzglh1gyai7eIw00");
                                     })()}
                                     target="_blank"
                                     rel="noopener noreferrer"
@@ -442,16 +555,23 @@ const ParentDashboard = () => {
                         <div className="bg-white rounded-2xl shadow-sm border border-gray-200">
                             <div className="border-b border-gray-200 px-6 py-3">
                                 <div className="flex gap-6 overflow-x-auto">
-                                    {['overview', 'book', 'messages', 'invoices', 'upcoming'].map(tab => (
+                                    {['overview', 'upcoming', 'book', 'messages', 'invoices'].map(tab => (
                                         <button
                                             key={tab}
                                             onClick={() => setActiveTab(tab)}
-                                            className={`py-3 px-4 font-bold transition-all border-b-2 whitespace-nowrap ${activeTab === tab
+                                            className={`py-3 px-4 font-bold transition-all border-b-2 whitespace-nowrap relative ${activeTab === tab
                                                 ? 'border-blue-600 text-blue-600'
                                                 : 'border-transparent text-gray-400 hover:text-gray-600'
                                                 }`}
                                         >
                                             {tab === 'book' ? 'Book Lesson' : tab.charAt(0).toUpperCase() + tab.slice(1)}
+                                            {tab === 'messages' && (() => {
+                                                const threadKey = parent ? `parent_${parent.email}` : '';
+                                                const allMsg = JSON.parse(localStorage.getItem('chat_messages_v2') || '{}');
+                                                const thread = allMsg[threadKey] || [];
+                                                const unread = thread.filter(m => m.sender !== parent?.email && !m.read).length;
+                                                return unread > 0 ? <span className="absolute -top-0.5 -right-0.5 min-w-[1.25rem] h-5 px-1 flex items-center justify-center bg-red-500 text-white text-xs font-bold rounded-full">{unread > 9 ? '9+' : unread}</span> : null;
+                                            })()}
                                         </button>
                                     ))}
                                 </div>
@@ -460,10 +580,36 @@ const ParentDashboard = () => {
                             <div className="p-6">
                                 {activeTab === 'overview' && (
                                     <div className="space-y-6">
+                                        {stats.nextLesson && (
+                                            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl p-6 text-white flex flex-col sm:flex-row items-center justify-between gap-4">
+                                                <div>
+                                                    <h3 className="text-sm font-bold uppercase tracking-wider text-blue-100 mb-1">Next Lesson</h3>
+                                                    <p className="text-xl font-bold">{stats.nextLesson.subject || 'Session'}</p>
+                                                    <p className="text-blue-100 text-sm mt-1">{new Date(stats.nextLesson.date).toLocaleDateString('en-GB')} at {stats.nextLesson.time}</p>
+                                                </div>
+                                                {(() => {
+                                                    const allB = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+                                                    const packBookings = stats.nextLesson.recurringId ? allB.filter(b => b.recurringId === stats.nextLesson.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time)) : [];
+                                                    const firstInPackPaid = packBookings.length === 10 && packBookings[0] && (packBookings[0].paymentStatus || '').toLowerCase() === 'paid';
+                                                    const isIn10Pack = packBookings.length === 10;
+                                                    const canStart = stats.nextLesson.type === 'consultation' || stats.nextLesson.paymentStatus === 'Due (Exception)' || (isIn10Pack ? firstInPackPaid : (stats.nextLesson.paymentStatus?.toLowerCase() === 'paid' || stats.nextLesson.paymentStatus === 'Due'));
+                                                    return (
+                                                        <button
+                                                            onClick={() => handleStartLesson(stats.nextLesson)}
+                                                            className={`px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shrink-0 ${canStart ? 'bg-white text-blue-600 hover:shadow-lg' : 'bg-white/30 text-blue-100 cursor-not-allowed'}`}
+                                                            disabled={!canStart}
+                                                            title={!canStart ? 'Pay for the first lesson in the pack in Invoices first' : 'Start lesson as ' + selectedStudent.name}
+                                                        >
+                                                            <Video size={20} /> Start Lesson
+                                                        </button>
+                                                    );
+                                                })()}
+                                            </div>
+                                        )}
                                         <h3 className="text-lg font-bold text-gray-800">Recent Session History</h3>
                                         {sessionHistory.length > 0 ? (
                                             <div className="space-y-3">
-                                                {sessionHistory.map(session => (
+                                                {[...sessionHistory].sort((a, b) => new Date(a.date + 'T' + (a.time || '00:00')) - new Date(b.date + 'T' + (b.time || '00:00'))).map(session => (
                                                     <div key={session.id} className="p-4 bg-gray-50 rounded-xl border border-gray-200">
                                                         <div className="flex items-center justify-between">
                                                             <div className="flex-1">
@@ -477,6 +623,11 @@ const ParentDashboard = () => {
                                                                             <p className="text-[10px] font-bold text-green-800 uppercase mb-0.5">Went Well</p>
                                                                             <p className="text-xs text-gray-700">{session.feedback_well}</p>
                                                                         </div>
+                                                                    )}
+                                                                    {session.lessonPdfBase64 && (
+                                                                        <a href={`data:application/pdf;base64,${session.lessonPdfBase64}`} download={`lesson-notes-${new Date(session.date).toISOString().split('T')[0]}.pdf`} className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-700 font-bold text-xs">
+                                                                            <FileText size={14} /> Download lesson notes (PDF)
+                                                                        </a>
                                                                     )}
                                                                 </div>
                                                             </div>
@@ -493,6 +644,17 @@ const ParentDashboard = () => {
                                         ) : (
                                             <p className="text-gray-500 text-center py-8">No session history yet</p>
                                         )}
+
+                                        <h3 className="text-lg font-bold text-gray-800 mt-8">Note for teacher</h3>
+                                        <p className="text-sm text-gray-500 mb-2">Leave a message for the teacher (e.g. goals, concerns). Only the teacher will see this.</p>
+                                        <textarea
+                                            className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:border-blue-500 outline-none min-h-[80px] text-gray-800"
+                                            placeholder="e.g. Please focus on algebra this week..."
+                                            value={noteForTeacher}
+                                            onChange={(e) => setNoteForTeacher(e.target.value)}
+                                            onBlur={() => saveNoteForTeacher(noteForTeacher)}
+                                        />
+                                        <p className="text-[10px] text-blue-500 mt-1 italic">Saves automatically when you click away</p>
                                     </div>
                                 )}
 
@@ -510,7 +672,7 @@ const ParentDashboard = () => {
                                                                     <p className="font-bold text-slate-900 text-lg">Single Lesson</p>
                                                                     <span className="bg-slate-100 text-slate-600 text-[10px] font-black px-2 py-0.5 rounded-full uppercase">Pay-as-you-go</span>
                                                                 </div>
-                                                                <p className="text-xs text-slate-500 font-bold">£{getStudentLevel(selectedStudent) === 'A-Level' ? '40' : '30'} per session</p>
+                                                                <p className="text-xs text-slate-500 font-bold">£{getStudentLevel(selectedStudent) === 'A-Level' ? '40' : getStudentLevel(selectedStudent) === 'KS3' ? '25' : '30'} per session</p>
                                                             </div>
                                                         </div>
                                                         <button onClick={() => { setBookingStep('select'); setBookingType('single'); }} className="w-full md:w-auto px-8 py-3 bg-slate-900 text-white rounded-xl font-black hover:bg-slate-800 transition-all shadow-md text-sm uppercase tracking-widest">Book Single Time</button>
@@ -539,6 +701,10 @@ const ParentDashboard = () => {
                                                                     <span className="bg-purple-100 text-purple-700 text-[10px] font-black px-2 py-0.5 rounded-full uppercase">Pay Upfront & Save</span>
                                                                 </div>
                                                                 <p className="text-xs text-slate-500 font-bold">Pay for 10 sessions now and save £20-£30.</p>
+                                                                <div className="mt-2 p-2 rounded-lg bg-amber-50 border border-amber-200 text-left max-w-md">
+                                                                    <p className="text-[9px] font-black text-amber-800 uppercase tracking-widest mb-0.5">Refund & Administrative Fee Policy</p>
+                                                                    <p className="text-[9px] text-amber-900 font-medium leading-relaxed">A non-refundable £15.00 admin fee applies to bundle purchases. Refunds for unused sessions are calculated as remaining balance minus this fee. Used sessions are non-refundable.</p>
+                                                                </div>
                                                             </div>
                                                         </div>
                                                         <button onClick={() => { setBookingStep('select'); setBookingType('pack'); setLessonFrequency('once'); }} className="w-full md:w-auto px-8 py-3 bg-purple-600 text-white rounded-xl font-black hover:bg-purple-700 transition-all shadow-md text-sm uppercase tracking-widest">Book Bundle & Save</button>
@@ -596,6 +762,14 @@ const ParentDashboard = () => {
                                                     )}
                                                 </div>
 
+                                                {bookingType === 'pack' && !rescheduleTarget && (
+                                                    <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-left mb-4">
+                                                        <p className="text-[10px] font-black text-amber-800 uppercase tracking-widest mb-1">Refund & Administrative Fee Policy</p>
+                                                        <p className="text-[10px] text-amber-900 font-medium leading-relaxed">
+                                                            A non-refundable administrative fee of £15.00 applies to all bundle purchases to cover secure payment processing and account setup. In the event of a requested refund for unused sessions, the refund will be calculated based on the remaining balance minus this administrative fee. Please note that used sessions are non-refundable.
+                                                        </p>
+                                                    </div>
+                                                )}
                                                 {((bookingType === 'pack' && lessonFrequency === 'twice' && selectedSlots.length === 2) || (selectedSlot)) && (
                                                     <div className="bg-blue-600 p-6 rounded-2xl text-white flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl">
                                                         <div className="flex-1">
@@ -672,8 +846,8 @@ const ParentDashboard = () => {
                                                                             subject: bookingSubject,
                                                                             type: bookingType,
                                                                             status: 'confirmed',
-                                                                            paymentStatus: i === 0 ? 'Due' : (bookingType === 'pack' ? 'Paid' : 'Upcoming'),
-                                                                            cost: i === 0 ? (getStudentLevel(selectedStudent, bookingSubject) === 'A-Level' ? (bookingType === 'pack' ? 370 : 40) : (bookingType === 'pack' ? 280 : 30)) : (bookingType === 'weekly' ? (getStudentLevel(selectedStudent, bookingSubject) === 'A-Level' ? 40 : 30) : 0),
+                                                                            paymentStatus: i === 0 ? 'Due' : (bookingType === 'pack' ? 'In bundle' : 'Upcoming'),
+                                                                            cost: i === 0 ? (getStudentLevel(selectedStudent, bookingSubject) === 'A-Level' ? (bookingType === 'pack' ? 370 : 40) : (getStudentLevel(selectedStudent, bookingSubject) === 'KS3' ? (bookingType === 'pack' ? 230 : 25) : (bookingType === 'pack' ? 280 : 30))) : (bookingType === 'weekly' ? (getStudentLevel(selectedStudent, bookingSubject) === 'A-Level' ? 40 : getStudentLevel(selectedStudent, bookingSubject) === 'KS3' ? 25 : 30) : 0),
                                                                             recurringId: recurringId
                                                                         });
                                                                         slotsToMark.push({ date: dateStr, time: selectedSlot.time });
@@ -689,12 +863,18 @@ const ParentDashboard = () => {
                                                                         type: 'single',
                                                                         status: 'confirmed',
                                                                         paymentStatus: 'Due',
-                                                                        cost: getStudentLevel(selectedStudent, bookingSubject) === 'A-Level' ? 40 : 30
+                                                                        cost: getStudentLevel(selectedStudent, bookingSubject) === 'A-Level' ? 40 : (getStudentLevel(selectedStudent, bookingSubject) === 'KS3' ? 25 : 30)
                                                                     });
                                                                     slotsToMark.push({ date: selectedSlot.date, time: selectedSlot.time });
                                                                 }
 
                                                                 localStorage.setItem('tutor_bookings', JSON.stringify([...allBookings, ...bookingsToCreate]));
+
+                                                                try {
+                                                                    const allStudents = JSON.parse(localStorage.getItem('tutor_students') || '[]');
+                                                                    const updated = allStudents.map(s => (s.id === selectedStudent?.id || s.name === selectedStudent?.name) && !s.subject ? { ...s, subject: bookingSubject } : s);
+                                                                    if (updated.some((s, i) => s !== allStudents[i])) localStorage.setItem('tutor_students', JSON.stringify(updated));
+                                                                } catch (_) {}
 
                                                                 const updatedSlots = allSlots.map(s => {
                                                                     if (slotsToMark.some(sm => sm.date === s.date && sm.time === s.time)) {
@@ -708,9 +888,9 @@ const ParentDashboard = () => {
                                                                 const level = getStudentLevel(selectedStudent, bookingSubject);
                                                                 let stripeUrl = "";
                                                                 if (bookingType === 'pack') {
-                                                                    stripeUrl = level === 'A-Level' ? "https://buy.stripe.com/5kA6oLe0Y6GHchG4gn" : "https://buy.stripe.com/eVqbJ1bUX1qnbVcdujeIw01";
+                                                                    stripeUrl = level === 'A-Level' ? "https://buy.stripe.com/5kA6oLe0Y6GHchG4gn" : (level === 'KS3' ? "https://buy.stripe.com/28EbJ17EHed97EW9e3eIw04" : "https://buy.stripe.com/eVqbJ1bUX1qnbVcdujeIw01");
                                                                 } else {
-                                                                    stripeUrl = level === 'A-Level' ? "https://buy.stripe.com/bJe9ATbUXed93oG4XNeIw03" : "https://buy.stripe.com/14A3cv5wzglh1gyai7eIw00";
+                                                                    stripeUrl = level === 'A-Level' ? "https://buy.stripe.com/bJe9ATbUXed93oG4XNeIw03" : (level === 'KS3' ? "https://buy.stripe.com/eVq4gz3or5GDbVccqfeIw05" : "https://buy.stripe.com/14A3cv5wzglh1gyai7eIw00");
                                                                 }
 
                                                                 window.open(stripeUrl, '_blank');
@@ -767,37 +947,155 @@ const ParentDashboard = () => {
                                     </div>
                                 )}
 
-                                {activeTab === 'invoices' && (
+                                {activeTab === 'invoices' && (() => {
+                                    const allItems = [...upcomingLessons, ...sessionHistory].map(item => ({ ...item, date: item.date || item.sessionDate })).filter(i => i.date);
+                                    const now = new Date();
+                                    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                                    const dataMonths = [...new Set(allItems.map(item => {
+                                        const d = new Date(item.date);
+                                        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                                    }))];
+                                    const sixMonthKeys = Array.from({ length: 6 }, (_, i) => { const d = new Date(now.getFullYear(), now.getMonth() + i, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
+                                    const months = [...new Set([...sixMonthKeys, ...dataMonths])].sort();
+                                    const [y, m] = (invoiceMonth || currentMonthKey).split('-').map(Number);
+                                    const filtered = allItems.filter(item => {
+                                        const d = new Date(item.date);
+                                        return d.getFullYear() === y && d.getMonth() + 1 === m;
+                                    }).sort((a, b) => new Date(a.date) - new Date(b.date));
+                                    return (
                                     <div className="space-y-4">
                                         <h3 className="text-lg font-bold text-gray-800">Invoices & History</h3>
-                                        {stats.unpaidInvoices.map(invoice => (
-                                            <div key={invoice.id} className="p-4 bg-orange-50 rounded-xl border-2 border-orange-100 flex items-center justify-between">
-                                                <div>
-                                                    <p className="font-bold text-gray-900">{invoice.subject}</p>
-                                                    <p className="text-sm text-gray-500">£{invoice.cost} • Due</p>
-                                                </div>
-                                                <button onClick={() => window.open(invoice.cost >= 280 ? "https://buy.stripe.com/5kA6oLe0Y6GHchG4gn" : "https://buy.stripe.com/bJe9ATbUXed93oG4XNeIw03", "_blank")} className="bg-orange-600 text-white px-6 py-2 rounded-xl font-bold">Pay Now</button>
+                                        <div className="flex flex-wrap items-center gap-3">
+                                            <span className="text-xs font-black text-gray-500 uppercase tracking-widest">Month</span>
+                                            <select value={invoiceMonth} onChange={(e) => setInvoiceMonth(e.target.value)} className="rounded-xl border-2 border-gray-100 px-4 py-2 font-bold text-sm text-gray-800 bg-white focus:border-blue-500">
+                                                {months.map(monthKey => {
+                                                    const [yr, mo] = monthKey.split('-').map(Number);
+                                                    const label = new Date(yr, mo - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+                                                    return <option key={monthKey} value={monthKey}>{label}</option>;
+                                                })}
+                                            </select>
+                                        </div>
+                                        {stats.unpaidInvoices.filter(inv => !inv.date || (() => { const d = new Date(inv.date); return d.getFullYear() === y && d.getMonth() + 1 === m; })()).length > 0 && (
+                                            <div className="space-y-2">
+                                                <p className="text-xs font-bold text-amber-700 uppercase">Due this month</p>
+                                                {stats.unpaidInvoices.filter(invoice => {
+                                                    const d = invoice.date ? new Date(invoice.date) : new Date();
+                                                    return d.getFullYear() === y && d.getMonth() + 1 === m;
+                                                }).map(invoice => {
+                                                    const level = getStudentLevel(selectedStudent, invoice.subject);
+                                                    const amount = getLessonRate(invoice);
+                                                    const usePackLink = invoice.type === 'pack' || amount >= 230;
+                                                    const stripeUrl = usePackLink
+                                                        ? (level === 'A-Level' ? "https://buy.stripe.com/5kA6oLe0Y6GHchG4gn" : level === 'KS3' ? "https://buy.stripe.com/28EbJ17EHed97EW9e3eIw04" : "https://buy.stripe.com/eVqbJ1bUX1qnbVcdujeIw01")
+                                                        : (level === 'A-Level' ? "https://buy.stripe.com/bJe9ATbUXed93oG4XNeIw03" : level === 'KS3' ? "https://buy.stripe.com/eVq4gz3or5GDbVccqfeIw05" : "https://buy.stripe.com/14A3cv5wzglh1gyai7eIw00");
+                                                    const lessonType = invoice.subject || 'Lesson';
+                                                    return (
+                                                    <div key={invoice.id} className="p-4 bg-orange-50 rounded-xl border-2 border-orange-100 flex items-center justify-between">
+                                                        <div>
+                                                            <p className="text-[10px] font-black text-orange-600 uppercase tracking-wider">Lesson type</p>
+                                                            <p className="font-bold text-purple-600">{lessonType}</p>
+                                                            {invoice.type === 'pack' && <p className="text-xs text-gray-500 mt-0.5">10-lesson pack</p>}
+                                                            <p className="text-sm text-gray-500 mt-1">£{amount} • Due</p>
+                                                        </div>
+                                                        <button onClick={() => window.open(stripeUrl, "_blank")} className="bg-orange-600 text-white px-6 py-2 rounded-xl font-bold">Pay Now</button>
+                                                    </div>
+                                                    );
+                                                })}
                                             </div>
-                                        ))}
+                                        )}
+                                        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+                                            <div className="overflow-x-auto overflow-y-auto max-h-[50vh]">
+                                                <table className="w-full text-left">
+                                                    <thead className="bg-gray-50/50 border-b border-gray-100 sticky top-0">
+                                                        <tr>
+                                                            <th className="p-3 font-black text-gray-400 text-[9px] uppercase tracking-widest">Date</th>
+                                                            <th className="p-3 font-black text-gray-400 text-[9px] uppercase tracking-widest">Lesson type</th>
+                                                            <th className="p-3 font-black text-gray-400 text-[9px] uppercase tracking-widest">Description</th>
+                                                            <th className="p-3 font-black text-gray-400 text-[9px] uppercase tracking-widest">Status</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-gray-50">
+                                                        {filtered.map((item, idx) => {
+                                                            const isPaid = (item.paymentStatus || '').toLowerCase() === 'paid';
+                                                            const packBookings = item.recurringId ? (JSON.parse(localStorage.getItem('tutor_bookings') || '[]')).filter(b => b.recurringId === item.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time)) : [];
+                                                            const firstInPackPaid = packBookings.length === 10 && packBookings[0] && (packBookings[0].paymentStatus || '').toLowerCase() === 'paid';
+                                                            const statusLabel = item.type === 'consultation' ? 'Paid' : isPaid ? 'Paid' : (item.paymentStatus === 'In bundle' ? (firstInPackPaid ? 'Paid in bulk' : 'Awaiting initial payment') : 'Due');
+                                                            const lessonType = item.subject || '—';
+                                                            const description = item.lessonNotes || item.topic || item.subject || '—';
+                                                            return (
+                                                            <tr key={item.id || idx} className="hover:bg-gray-50/50">
+                                                                <td className="p-3 font-bold text-gray-900 text-xs">{new Date(item.date).toLocaleDateString('en-GB')}</td>
+                                                                <td className="p-3 font-bold text-purple-600 text-xs">{lessonType}</td>
+                                                                <td className="p-3 font-medium text-gray-600 text-xs">{description}</td>
+                                                                <td className="p-3"><span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${statusLabel === 'Paid' || statusLabel === 'Paid in bulk' ? 'bg-green-100 text-green-700' : statusLabel === 'Awaiting initial payment' ? 'bg-amber-100 text-amber-700' : 'bg-red-50 text-red-700'}`}>{statusLabel}</span></td>
+                                                            </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                            {filtered.length === 0 && <div className="p-6 text-center text-gray-400 font-bold text-sm">No sessions this month.</div>}
+                                        </div>
                                     </div>
-                                )}
+                                    );
+                                })()}
 
-                                {activeTab === 'upcoming' && (
+                                {activeTab === 'upcoming' && (() => {
+                                    const now = new Date();
+                                    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                                    const dataMonths = [...new Set(upcomingLessons.map(l => {
+                                        const d = new Date(l.date);
+                                        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                                    }))];
+                                    const sixMonthKeys = Array.from({ length: 6 }, (_, i) => { const d = new Date(now.getFullYear(), now.getMonth() + i, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
+                                    const months = [...new Set([...sixMonthKeys, ...dataMonths])].sort();
+                                    const [uy, um] = (upcomingMonth || currentMonthKey).split('-').map(Number);
+                                    const filteredUpcoming = upcomingLessons.filter(l => {
+                                        const d = new Date(l.date);
+                                        return d.getFullYear() === uy && d.getMonth() + 1 === um;
+                                    }).sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+                                    return (
                                     <div className="space-y-3">
-                                        <h3 className="text-lg font-bold text-gray-800">Upcoming Lessons</h3>
-                                        {upcomingLessons.map(lesson => (
+                                        <div className="flex flex-wrap items-center justify-between gap-3">
+                                            <h3 className="text-lg font-bold text-gray-800">Upcoming Lessons</h3>
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-xs font-black text-gray-500 uppercase tracking-widest">Month</span>
+                                                <select value={upcomingMonth} onChange={(e) => setUpcomingMonth(e.target.value)} className="rounded-xl border-2 border-gray-100 px-4 py-2 font-bold text-sm text-gray-800 bg-white focus:border-blue-500">
+                                                    {months.map(monthKey => {
+                                                        const [yr, mo] = monthKey.split('-').map(Number);
+                                                        const label = new Date(yr, mo - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+                                                        return <option key={monthKey} value={monthKey}>{label}</option>;
+                                                    })}
+                                                </select>
+                                            </div>
+                                        </div>
+                                        {filteredUpcoming.map(lesson => {
+                                            const allBookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+                                            const packBookings = lesson.recurringId ? allBookings.filter(b => b.recurringId === lesson.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time)) : [];
+                                            const lessonNum = packBookings.length === 10 ? (packBookings.findIndex(b => b.id === lesson.id) + 1) || null : null;
+                                            const firstInPackPaid = packBookings.length === 10 && packBookings[0] && (packBookings[0].paymentStatus || '').toLowerCase() === 'paid';
+                                            const showAsPaid = (lesson.paymentStatus || '').toLowerCase() === 'paid' && (!lesson.recurringId || firstInPackPaid);
+                                            const bundleLabel = firstInPackPaid ? 'Paid in bulk' : 'Awaiting initial payment';
+                                            const statusLabel = lesson.status === 'pending_approval' ? 'Pending Approval' : lesson.type === 'consultation' ? 'Free Consultation' : (lesson.paymentStatus === 'Due' ? 'Awaiting initial payment' : lesson.paymentStatus === 'In bundle' ? bundleLabel : (lesson.paymentStatus === 'Due (Exception)' ? 'Payment due' : (showAsPaid ? 'Paid' : (lesson.recurringId && !firstInPackPaid ? 'Awaiting initial payment' : (lesson.paymentStatus || 'Upcoming')))));
+                                            return (
                                             <div key={lesson.id} className="p-5 bg-white rounded-2xl border border-gray-100 shadow-sm">
-                                                <div className="flex justify-between items-center">
-                                                    <div>
-                                                        <p className="font-bold text-gray-900">{lesson.subject}</p>
-                                                        <div className="flex items-center gap-2 mt-1">
-                                                            <p className="text-sm text-gray-500">{new Date(lesson.date).toLocaleDateString('en-GB')} at {lesson.time}</p>
+                                                <div className="flex justify-between items-center gap-4 flex-wrap">
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Lesson</div>
+                                                        <p onClick={() => setEditLessonSubjectTarget({ lesson, currentNote: lesson.subject || '' })} className="font-bold text-gray-900 truncate cursor-pointer hover:text-blue-600 transition-colors py-1 rounded border border-transparent hover:border-blue-200 px-2 -mx-2">
+                                                            {lesson.subject || selectedStudent?.subject || 'Click to set lesson type'}
+                                                        </p>
+                                                        <p className="text-sm text-gray-500 mt-0.5">{new Date(lesson.date).toLocaleDateString('en-GB')} at {lesson.time}</p>
+                                                        <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                                            {lessonNum != null && <span className="text-xs text-teal-600 font-bold">Lesson {lessonNum}/10</span>}
                                                             <span className={`text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded ${lesson.status === 'pending_approval' ? 'bg-purple-100 text-purple-700' :
                                                                 lesson.type === 'consultation' ? 'bg-blue-100 text-blue-700' :
-                                                                    lesson.paymentStatus?.toLowerCase() === 'paid' ? 'bg-green-100 text-green-700' :
-                                                                        'bg-red-50 text-red-600'
+                                                                    showAsPaid ? 'bg-green-100 text-green-700' :
+                                                                        lesson.paymentStatus === 'In bundle' ? (firstInPackPaid ? 'bg-green-100 text-green-700' : 'bg-teal-100 text-teal-700') :
+                                                                            lesson.paymentStatus === 'Due' || lesson.paymentStatus === 'Due (Exception)' ? 'bg-amber-100 text-amber-700' :
+                                                                                'bg-red-50 text-red-600'
                                                                 }`}>
-                                                                {lesson.status === 'pending_approval' ? 'Pending Approval' : (lesson.type === 'consultation' ? 'Free Consultation' : (lesson.paymentStatus === 'Due' ? 'Payment Due' : lesson.paymentStatus || 'Upcoming'))}
+                                                                {statusLabel}
                                                             </span>
                                                         </div>
                                                     </div>
@@ -806,6 +1104,20 @@ const ParentDashboard = () => {
                                                             <button onClick={() => handleApproval(lesson)} className="bg-green-600 text-white px-4 py-2 rounded-xl text-xs font-bold">Approve</button>
                                                         ) : (
                                                             <>
+                                                                {(() => {
+                                                                    const isIn10Pack = packBookings.length === 10;
+                                                                    const canStartLesson = lesson.type === 'consultation' || lesson.paymentStatus === 'Due (Exception)' || (isIn10Pack ? firstInPackPaid : (lesson.paymentStatus?.toLowerCase() === 'paid' || lesson.paymentStatus === 'Due'));
+                                                                    return (
+                                                                <button
+                                                                    onClick={() => handleStartLesson(lesson)}
+                                                                    title={!canStartLesson ? 'Pay for the first lesson in the pack in Invoices first' : 'Join as ' + selectedStudent.name}
+                                                                    className={`flex items-center gap-1 px-4 py-2 rounded-xl text-xs font-bold transition-all ${canStartLesson ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}
+                                                                    disabled={!canStartLesson}
+                                                                >
+                                                                    <Video size={14} /> Start Lesson
+                                                                </button>
+                                                                    );
+                                                                })()}
                                                                 <button onClick={() => handleParentReschedule(lesson)} className="bg-blue-50 text-blue-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-blue-100 transition-all">Reschedule</button>
                                                                 <button onClick={() => setCancelTarget(lesson)} className="bg-gray-100 text-gray-500 px-4 py-2 rounded-xl text-xs font-bold hover:bg-red-50 hover:text-red-500 transition-all">Cancel</button>
                                                             </>
@@ -813,9 +1125,12 @@ const ParentDashboard = () => {
                                                     </div>
                                                 </div>
                                             </div>
-                                        ))}
+                                            );
+                                        })}
+                                        {filteredUpcoming.length === 0 && <div className="p-6 text-center text-gray-400 font-bold text-sm">No upcoming lessons this month.</div>}
                                     </div>
-                                )}
+                                    );
+                                })()}
                             </div>
                         </div>
                     </>
@@ -840,9 +1155,15 @@ const ParentDashboard = () => {
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
                     <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 text-center" onClick={e => e.stopPropagation()}>
                         <h3 className="text-xl font-bold mb-2">Cancel Lesson?</h3>
-                        <p className="text-gray-600 mb-6">
+                        <p className="text-gray-600 mb-2">
                             {cancelTarget.recurringId ? "This is part of a series. Cancel just this one or all future sessions?" : "Are you sure you want to cancel this session?"}
                         </p>
+                        {cancelTarget.recurringId && (() => {
+                            const allBookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+                            const pack = allBookings.filter(b => b.recurringId === cancelTarget.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+                            const isPaidPack = pack.length === 10 && pack[0] && (pack[0].paymentStatus || '').toLowerCase() === 'paid';
+                            return isPaidPack ? <p className="text-amber-700 text-sm font-medium mb-4 bg-amber-50 rounded-xl p-3">Part of a paid pack – no refund for individual lessons. Consider rescheduling instead.</p> : null;
+                        })()}
                         <div className="flex flex-col gap-3">
                             {cancelTarget.recurringId ? (
                                 <>
@@ -852,7 +1173,34 @@ const ParentDashboard = () => {
                             ) : (
                                 <button onClick={() => handleParentCancel(false)} className="py-3 bg-red-600 text-white rounded-xl font-bold">Cancel Session</button>
                             )}
+                            <button onClick={() => { const lesson = cancelTarget; setCancelTarget(null); handleParentReschedule(lesson); }} className="py-3 bg-blue-50 text-blue-600 rounded-xl font-bold hover:bg-blue-100">Reschedule instead</button>
                             <button onClick={() => setCancelTarget(null)} className="py-3 text-gray-400 font-bold">Keep Session</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {editLessonSubjectTarget && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4" onClick={() => setEditLessonSubjectTarget(null)}>
+                    <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-8" onClick={e => e.stopPropagation()}>
+                        <h3 className="text-lg font-bold text-gray-900 mb-2">Lesson (e.g. KS3 Maths, A-Level Sociology)</h3>
+                        <p className="text-sm text-gray-500 mb-4">This will appear on the teacher dashboard.</p>
+                        <textarea
+                            value={editLessonSubjectTarget.currentNote}
+                            onChange={e => setEditLessonSubjectTarget({ ...editLessonSubjectTarget, currentNote: e.target.value })}
+                            className="w-full border-2 border-gray-100 rounded-xl p-4 min-h-[100px] font-bold text-gray-800 bg-gray-50 mb-6"
+                            placeholder="e.g. KS3 Maths, A-Level Sociology"
+                        />
+                        <div className="flex gap-3">
+                            <button onClick={() => {
+                                const all = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+                                const updated = all.map(b => b.id === editLessonSubjectTarget.lesson.id ? { ...b, subject: editLessonSubjectTarget.currentNote.trim() || b.subject } : b);
+                                localStorage.setItem('tutor_bookings', JSON.stringify(updated));
+                                setEditLessonSubjectTarget(null);
+                                loadStudentData();
+                                setNotification({ type: 'success', message: 'Lesson updated. Teacher will see this.' });
+                            }} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700">Save</button>
+                            <button onClick={() => setEditLessonSubjectTarget(null)} className="py-3 text-gray-400 font-bold">Cancel</button>
                         </div>
                     </div>
                 </div>

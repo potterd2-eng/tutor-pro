@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useSearchParams, Navigate, useNavigate } from 'react-router-dom';
 import Whiteboard from './Whiteboard';
 import VideoChat from './VideoChat';
@@ -10,23 +10,31 @@ const Session = () => {
     const { roomId } = useParams();
     const [searchParams] = useSearchParams();
     const navigate = useNavigate();
+    const whiteboardRef = useRef(null);
     // Robust Host Detection: Check URL param OR localStorage auth
     const isAuthenticatedTutor = localStorage.getItem('tutor_authenticated') === 'true';
     const isHost = searchParams.get('host') === 'true' || isAuthenticatedTutor;
-    const studentName = searchParams.get('student'); // Keep original variable name
-    const sessionType = searchParams.get('type') || 'lesson'; // 'lesson' or 'consultation'
+    const studentName = searchParams.get('student');
+    const sessionType = searchParams.get('type') || 'lesson';
     const isStudent = !isHost;
+    const savedStudentName = roomId && typeof window !== 'undefined' ? localStorage.getItem(`session_student_${roomId}`) : null;
+    const displayName = studentName || savedStudentName || 'Guest';
 
-    if (isStudent && !studentName) {
-        // Redirect to Login if no name provided
+    useEffect(() => {
+        if (isStudent && studentName && roomId) {
+            localStorage.setItem(`session_student_${roomId}`, studentName);
+        }
+    }, [isStudent, studentName, roomId]);
+
+    if (isStudent && !studentName && !savedStudentName) {
         return <Navigate to={`/student-login?join=${roomId}`} replace />;
     }
-
-    const displayName = studentName || 'Guest';
 
     const [connection, setConnection] = useState(null);
     const [showFeedbackModal, setShowFeedbackModal] = useState(false);
     const [showEndConfirm, setShowEndConfirm] = useState(false);
+    const [lessonEndedByHost, setLessonEndedByHost] = useState(false);
+    const [endRedirectSeconds, setEndRedirectSeconds] = useState(300); // 5 min
 
     // Feedback Form State
     const [lessonTopic, setLessonTopic] = useState('');
@@ -39,14 +47,21 @@ const Session = () => {
 
     const [paymentVerified, setPaymentVerified] = useState(sessionType === 'consultation' || isHost);
     const [strictBlock, setStrictBlock] = useState(false);
+    const [showLessonTimer, setShowLessonTimer] = useState(true); // Only true for paid-upfront (pack) sessions
 
-    // Initial Payment Check
+    // Initial Payment Check + lesson timer (only for paid-upfront pack sessions)
     useEffect(() => {
+        const bookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
+        const currentBooking = bookings.find(b => b.id === roomId || b.id === searchParams.get('bookingId'));
+        const isPaidPack = currentBooking && (currentBooking.type === 'pack' || (currentBooking.recurringId && (() => {
+            const pack = bookings.filter(b => b.recurringId === currentBooking.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+            return pack.length === 10 && pack[0] && (pack[0].paymentStatus || '').toLowerCase() === 'paid';
+        })()));
+        setShowLessonTimer(true); // Always show 60-min timer
+
         if (sessionType === 'consultation' || isHost) return;
 
-        const bookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
         const history = JSON.parse(localStorage.getItem('tutor_session_history')) || [];
-        const currentBooking = bookings.find(b => b.id === roomId || b.id === searchParams.get('bookingId'));
 
         // Check for Strict Block (Outstanding payments > 7 days old)
         const sevenDaysAgo = new Date();
@@ -64,7 +79,7 @@ const Session = () => {
             setStrictBlock(true);
         }
 
-        if (currentBooking && (currentBooking.paymentStatus === 'Paid' || currentBooking.paymentStatus === 'Due (Exception)')) {
+        if (currentBooking && (currentBooking.paymentStatus === 'Paid' || currentBooking.paymentStatus === 'Due (Exception)' || currentBooking.paymentStatus === 'In bundle')) {
             setPaymentVerified(true);
             if (currentBooking.paymentStatus === 'Due (Exception)') {
                 setPaymentStatus('Due (Exception)');
@@ -82,10 +97,13 @@ const Session = () => {
             setStrictBlock(false); // Assume they paid something? Or re-check required.
             // Simplified: If they just paid via the link, let them in.
 
-            // Also update the booking in localStorage for future joins
+            // Also update the booking in localStorage; if it's part of a bundle, mark all in the pack as Paid
             const bookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
+            const paidId = roomId || searchParams.get('bookingId');
+            const paidBooking = bookings.find(b => b.id === paidId);
+            const recurringId = paidBooking?.recurringId;
             const updatedBookings = bookings.map(b => {
-                if (b.id === roomId || b.id === searchParams.get('bookingId')) {
+                if (b.id === paidId || (recurringId && b.recurringId === recurringId)) {
                     return { ...b, paymentStatus: 'Paid' };
                 }
                 return b;
@@ -102,6 +120,34 @@ const Session = () => {
         setShowEndConfirm(true);
     };
 
+    // Student/parent: listen for teacher ending lesson; show overlay and 5-min redirect
+    useEffect(() => {
+        if (!connection || isHost) return;
+        const handler = (data) => {
+            if (data?.type === 'lesson_ended') setLessonEndedByHost(true);
+        };
+        connection.on('data', handler);
+        return () => {
+            connection.off?.('data', handler);
+        };
+    }, [connection, isHost]);
+
+    useEffect(() => {
+        if (!lessonEndedByHost || isHost) return;
+        const t = setInterval(() => {
+            setEndRedirectSeconds((s) => {
+                if (s <= 1) {
+                    if (window.location.pathname.includes('/session/')) {
+                        window.location.href = `/student-dashboard?student=${encodeURIComponent(displayName)}`;
+                    }
+                    return 0;
+                }
+                return s - 1;
+            });
+        }, 1000);
+        return () => clearInterval(t);
+    }, [lessonEndedByHost, isHost, displayName]);
+
     const requestException = () => {
         if (window.confirm("Request Exception: strictly valid for this session only.\n\nBy clicking OK, you agree to make the payment immediately after the lesson.")) {
             // Persist the exception in the booking
@@ -117,11 +163,14 @@ const Session = () => {
         }
     };
 
-    const submitFeedback = (e) => {
-        // ... (existing feedback submission logic)
+    const submitFeedback = async (e) => {
         e.preventDefault();
 
-        // Create consolidated feedback for display
+        let lessonPdfBase64 = null;
+        try {
+            lessonPdfBase64 = await whiteboardRef.current?.getLessonPDFBase64?.() ?? null;
+        } catch (_) {}
+
         const consolidatedFeedback = `${feedbackWell} ${feedbackImprove ? '| To Improve: ' + feedbackImprove : ''} ${feedbackFocus ? '| Focus: ' + feedbackFocus : ''}`.trim();
 
         const sessionLog = {
@@ -132,19 +181,19 @@ const Session = () => {
             studentId: searchParams.get('studentId') || displayName.toLowerCase().replace(/\s+/g, '_'),
             subject: lessonTopic,
             topic: lessonTopic,
-            feedback: consolidatedFeedback, // For parent dashboard
+            feedback: consolidatedFeedback,
             feedback_well: feedbackWell,
             feedback_improve: feedbackImprove,
             feedback_focus: feedbackFocus,
             next_steps: nextSteps,
-            nextSteps: nextSteps, // For teacher dashboard
+            nextSteps: nextSteps,
             cost: lessonCost,
             paymentStatus: paymentStatus,
             type: sessionType,
-            duration: '60' // Default 60 mins
+            duration: '60',
+            ...(lessonPdfBase64 && { lessonPdfBase64 })
         };
 
-        // Save to History
         const history = JSON.parse(localStorage.getItem('tutor_session_history')) || [];
         history.push(sessionLog);
         localStorage.setItem('tutor_session_history', JSON.stringify(history));
@@ -175,12 +224,42 @@ const Session = () => {
         <div className="relative w-screen h-screen overflow-hidden bg-brand-light">
             {paymentVerified ? (
                 <>
+                    {isStudent && lessonEndedByHost ? (
+                        <div className="fixed inset-0 z-[300] bg-purple-900/95 flex flex-col items-center justify-center p-6 text-center">
+                            <div className="bg-white p-10 rounded-3xl shadow-2xl max-w-md w-full">
+                                <h2 className="text-xl font-bold text-gray-900 mb-2">Lesson ended by teacher</h2>
+                                <p className="text-gray-600 mb-4">You will be redirected to your dashboard in {Math.floor(endRedirectSeconds / 60)}:{(endRedirectSeconds % 60).toString().padStart(2, '0')}.</p>
+                                <p className="text-sm text-gray-500">You can also leave now using the link below.</p>
+                                <button
+                                    type="button"
+                                    onClick={() => { window.location.href = `/student-dashboard?student=${encodeURIComponent(displayName)}`; }}
+                                    className="mt-6 py-3 px-6 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700"
+                                >
+                                    Go to dashboard now
+                                </button>
+                            </div>
+                        </div>
+                    ) : null}
+                    {isStudent && !lessonEndedByHost && (!connection || !connection.open) ? (
+                        <div className="fixed inset-0 z-[200] bg-purple-900/95 flex items-center justify-center p-6">
+                            <div className="bg-white p-10 rounded-3xl shadow-2xl max-w-md w-full text-center animate-pulse">
+                                <div className="w-16 h-16 rounded-full bg-purple-100 flex items-center justify-center mx-auto mb-6">
+                                    <span className="text-2xl">⏳</span>
+                                </div>
+                                <h2 className="text-xl font-bold text-gray-900 mb-2">Waiting for teacher to join</h2>
+                                <p className="text-gray-500">You will enter the lesson automatically when the teacher is in the meeting.</p>
+                                <p className="text-sm text-gray-400 mt-4 font-mono">Meeting ID: {roomId}</p>
+                            </div>
+                        </div>
+                    ) : null}
                     <Whiteboard
+                        ref={whiteboardRef}
                         connection={connection}
                         isHost={isHost}
                         sessionId={roomId}
                         studentName={displayName}
                         onEndLesson={handleEndLesson}
+                        showLessonTimer={showLessonTimer}
                     />
                     <VideoChat
                         roomId={roomId}
@@ -255,6 +334,9 @@ const Session = () => {
                             </button>
                             <button
                                 onClick={() => {
+                                    if (connection?.open) {
+                                        try { connection.send({ type: 'lesson_ended' }); } catch (_) {}
+                                    }
                                     setShowEndConfirm(false);
                                     setShowFeedbackModal(true);
                                 }}
@@ -304,7 +386,13 @@ const Session = () => {
                             <button
                                 type="button"
                                 onClick={() => {
-                                    if (isHost) {
+                                    if (isHost && roomId) {
+                                        try {
+                                            const raw = localStorage.getItem('tutor_pending_feedback') || '[]';
+                                            const pending = JSON.parse(raw);
+                                            pending.push({ roomId, studentName: displayName, date: new Date().toISOString() });
+                                            localStorage.setItem('tutor_pending_feedback', JSON.stringify(pending));
+                                        } catch (_) {}
                                         localStorage.setItem('teacher_dashboard_unlocked', 'true');
                                         window.location.href = '/teacher';
                                     } else {

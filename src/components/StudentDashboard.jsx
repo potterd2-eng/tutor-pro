@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
     Clock, Calendar, Video, MessageSquare, Star,
     CheckCircle, AlertCircle, TrendingUp, CreditCard,
     FileText, ChevronRight, LogOut, Plus, ArrowRight, X, Trash2, BookOpen
 } from 'lucide-react';
-import { emailService } from '../utils/email';
+import { emailService, TEACHER_EMAIL } from '../utils/email';
 import { generateGoogleCalendarUrl } from '../utils/calendar';
 
 const StudentDashboard = () => {
@@ -20,6 +20,7 @@ const StudentDashboard = () => {
     const [activeTab, setActiveTab] = useState('overview');
     const [showBookingModal, setShowBookingModal] = useState(false);
     const [bookingSubject, setBookingSubject] = useState('');
+    const [bookingNotes, setBookingNotes] = useState('');
     const [isRecurring, setIsRecurring] = useState(false);
     const [selectedSlot, setSelectedSlot] = useState(null);
     const [rescheduleTarget, setRescheduleTarget] = useState(null);
@@ -34,6 +35,10 @@ const StudentDashboard = () => {
     });
     const [paymentTarget, setPaymentTarget] = useState(null);
     const [receiptTarget, setReceiptTarget] = useState(null);
+    const [invoiceMonth, setInvoiceMonth] = useState(() => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    });
     const [notification, setNotification] = useState(null);
     const [chatMessages, setChatMessages] = useState([]);
     const [hourlyRate, setHourlyRate] = useState(30);
@@ -46,6 +51,11 @@ const StudentDashboard = () => {
     const [confirmation, setConfirmation] = useState(null);
     const [cancelTarget, setCancelTarget] = useState(null);
     const [recurringType, setRecurringType] = useState('weekly'); // 'weekly' or 'pack'
+
+    const studentProfileSubject = useMemo(() => {
+        const all = JSON.parse(localStorage.getItem('tutor_students') || '[]');
+        return all.find(s => s.name === displayName)?.subject;
+    }, [displayName]);
 
     const getStudentLevel = (subject) => {
         if (!subject) return 'GCSE';
@@ -68,7 +78,7 @@ const StudentDashboard = () => {
                 (h.studentName && h.studentName.toLowerCase().includes(studentName.toLowerCase())) ||
                 (h.student && h.student.toLowerCase().includes(studentName.toLowerCase()))
             );
-            setHistory(myHistory.sort((a, b) => new Date(b.date + 'T' + b.time) - new Date(a.date + 'T' + a.time)));
+            setHistory(myHistory.sort((a, b) => new Date(a.date + 'T' + (a.time || '00:00')) - new Date(b.date + 'T' + (b.time || '00:00'))));
 
             const allStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
             const myProfile = allStudents.find(s => s.name.toLowerCase() === displayName.toLowerCase());
@@ -83,10 +93,16 @@ const StudentDashboard = () => {
             }
 
             const allBookings = JSON.parse(localStorage.getItem('tutor_bookings')) || [];
+            const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, '').trim();
+            const nUrl = norm(studentName);
             const myBookings = allBookings.filter(b => {
-                const studentMatch = b.student?.toLowerCase().includes(studentName.toLowerCase()) ||
-                    b.studentName?.toLowerCase().includes(studentName.toLowerCase());
-                const idMatch = myProfile && b.studentId === myProfile.id;
+                const studentMatch = nUrl && (
+                    norm(b.student) === nUrl || norm(b.studentName) === nUrl ||
+                    norm(b.student).includes(nUrl) || norm(b.studentName).includes(nUrl) ||
+                    (b.student && b.student.toLowerCase().includes((studentName || '').toLowerCase())) ||
+                    (b.studentName && b.studentName.toLowerCase().includes((studentName || '').toLowerCase()))
+                );
+                const idMatch = myProfile && (b.studentId === myProfile.id || b.student_id === myProfile.id);
                 return studentMatch || idMatch;
             });
             setBookings(myBookings.sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time)));
@@ -125,9 +141,10 @@ const StudentDashboard = () => {
     const handleJoinLesson = (booking) => {
         const isPaid = booking.paymentStatus?.toLowerCase() === 'paid';
         const isException = booking.paymentStatus === 'Due (Exception)';
+        const isInBundle = booking.paymentStatus === 'In bundle';
         const isFree = booking.type === 'consultation';
 
-        if (!isPaid && !isException && !isFree) {
+        if (!isPaid && !isException && !isInBundle && !isFree) {
             setNotification({ type: 'error', message: 'Please pay for this lesson before starting. You can pay in the Invoices tab.' });
             setActiveTab('invoices');
             return;
@@ -178,7 +195,9 @@ const StudentDashboard = () => {
         if (!editNoteTarget) return;
 
         const updated = bookings.map(b =>
-            b.id === editNoteTarget.booking.id ? { ...b, subject: editNoteTarget.currentNote } : b
+            b.id === editNoteTarget.booking.id
+                ? { ...b, subject: (editNoteTarget.currentSubject || '').trim() || undefined, lessonNotes: (editNoteTarget.currentLessonNotes || '').trim() || undefined }
+                : b
         );
         setBookings(updated);
         localStorage.setItem('tutor_bookings', JSON.stringify(updated));
@@ -193,7 +212,11 @@ const StudentDashboard = () => {
         localStorage.setItem('tutor_session_history', JSON.stringify(updatedHistory));
 
         const allBookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
-        const updatedBookings = allBookings.map(b => b.id === invoiceId ? { ...b, paymentStatus: 'Paid', paymentDate } : b);
+        const paidBooking = allBookings.find(b => b.id === invoiceId);
+        const recurringId = paidBooking?.recurringId;
+        const updatedBookings = allBookings.map(b =>
+            (b.id === invoiceId || (recurringId && b.recurringId === recurringId)) ? { ...b, paymentStatus: 'Paid', paymentDate } : b
+        );
         localStorage.setItem('tutor_bookings', JSON.stringify(updatedBookings));
 
         window.dispatchEvent(new Event('storage'));
@@ -202,10 +225,11 @@ const StudentDashboard = () => {
     const handleBookLesson = (slot) => {
         setRescheduleTarget(null); // Clear any pending reschedule request
         setSelectedSlot(slot);
-        // Default to student's subject or generic valid type
+        // Auto-set lesson type from student profile (e.g. KS3 Maths, GCSE Sociology)
         const allStudents = JSON.parse(localStorage.getItem('tutor_students')) || [];
         const student = allStudents.find(s => s.name === displayName);
         setBookingSubject(student?.subject || 'KS3 Maths');
+        setBookingNotes('');
         setIsRecurring(false);
         setRecurringType('weekly');
         setShowBookingModal(true);
@@ -262,6 +286,7 @@ const StudentDashboard = () => {
                 student: displayName,
                 studentId: studentId,
                 subject: bookingSubject,
+                lessonNotes: (bookingNotes || '').trim() || undefined,
                 type: isRecurring ? (recurringType === 'pack' ? 'pack' : 'weekly') : 'lesson',
                 bookedAt: new Date().toISOString(),
                 status: 'confirmed',
@@ -282,7 +307,8 @@ const StudentDashboard = () => {
                         id: `${selectedSlot.id}_${i}_${Date.now()}`,
                         date: date.toISOString().split('T')[0],
                         recurringId: recurringId,
-                        paymentStatus: i === 0 ? 'Due' : (recurringType === 'pack' ? 'Paid' : 'Upcoming'),
+                        lessonNotes: (bookingNotes || '').trim() || undefined,
+                        paymentStatus: i === 0 ? 'Due' : (recurringType === 'pack' ? 'In bundle' : 'Upcoming'),
                         cost: i === 0 ? (recurringType === 'pack' ? getBundlePrice(bookingSubject) : hourlyRate) : (recurringType === 'pack' ? 0 : hourlyRate)
                     });
                 }
@@ -290,6 +316,13 @@ const StudentDashboard = () => {
             } else {
                 localStorage.setItem('tutor_bookings', JSON.stringify([...allBookings, newBooking]));
             }
+
+            // Auto-save chosen subject to student profile so teacher sees level next to name
+            try {
+                const allStudents = JSON.parse(localStorage.getItem('tutor_students') || '[]');
+                const updated = allStudents.map(s => (s.name === displayName || s.id === studentId) && !s.subject ? { ...s, subject: bookingSubject } : s);
+                if (updated.some((s, i) => s !== allStudents[i])) localStorage.setItem('tutor_students', JSON.stringify(updated));
+            } catch (_) {}
 
             // Notify Teacher
             emailService.sendNewBookingNotificationToTeacher({
@@ -356,8 +389,10 @@ const StudentDashboard = () => {
         const updatedMessages = { ...allMessages, [studentName]: [...studentMessages, msg] };
         localStorage.setItem('chat_messages_v2', JSON.stringify(updatedMessages));
         setChatMessages([...studentMessages, msg]);
+        const sentContent = newMessage.trim();
         setNewMessage('');
         window.dispatchEvent(new Event('storage'));
+        emailService.sendMessageNotification(displayName, TEACHER_EMAIL, sentContent.slice(0, 200)).catch(() => {});
     };
 
     const handleConfirmCancellation = (cancelSeries = false) => {
@@ -422,7 +457,8 @@ const StudentDashboard = () => {
     };
 
     const nextLesson = bookings.find(b => new Date(b.date + 'T' + b.time) > new Date() && b.status !== 'cancelled');
-    const unpaidInvoices = history.filter(h => h.paymentStatus === 'Due').length;
+    const allInvoiceItems = [...bookings, ...history];
+    const unpaidInvoices = allInvoiceItems.filter(item => (item.paymentStatus === 'Due' || item.paymentStatus?.toLowerCase() === 'due') && item.type !== 'consultation').length;
     const unreadMessages = chatMessages.filter(m => m.sender === 'Davina' && !m.read).length;
 
     return (
@@ -553,29 +589,77 @@ const StudentDashboard = () => {
                                                             <div className="font-black text-lg text-gray-900 tracking-tighter">{new Date(booking.date).toLocaleDateString('en-GB', { weekday: 'long' })}</div>
                                                             <div className="text-gray-400 font-bold flex items-center gap-2 mt-0.5 text-sm"><Clock size={16} className="text-teal-500" /> {booking.time}</div>
 
-                                                            {/* Status Badge */}
-                                                            <div className="mt-2">
+                                                            {/* Status Badge: only show Paid when actually paid; Due/In bundle get distinct labels and styles */}
+                                                            <div className="mt-2 flex flex-wrap items-center gap-2">
                                                                 <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${booking.status === 'pending_approval'
                                                                     ? 'bg-purple-100 text-purple-700'
                                                                     : booking.type === 'consultation'
                                                                         ? 'bg-blue-100 text-blue-700'
-                                                                        : booking.paymentStatus?.toLowerCase() === 'paid'
-                                                                            ? 'bg-green-100 text-green-700'
-                                                                            : 'bg-red-50 text-red-600'
-                                                                    }`}>
-                                                                    {booking.status === 'pending_approval' ? 'Pending Approval' : (booking.type === 'consultation' ? 'Free Consultation' : (booking.paymentStatus === 'Due' ? 'Payment Due' : booking.paymentStatus))}
+                                                                        : (() => {
+                                                                    const isPaid = (booking.paymentStatus || '').toLowerCase() === 'paid';
+                                                                    const allB = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+                                                                    if (booking.recurringId) {
+                                                                        const pack = allB.filter(b => b.recurringId === booking.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+                                                                        if (pack.length === 10 && pack[0] && (pack[0].paymentStatus || '').toLowerCase() !== 'paid' && isPaid) return 'bg-amber-100 text-amber-700';
+                                                                    }
+                                                                    if (isPaid) return 'bg-green-100 text-green-700';
+                                                                    if (booking.paymentStatus === 'In bundle') {
+                                                                        const pack = allB.filter(b => b.recurringId === booking.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+                                                                        const firstPaid = pack.length === 10 && pack[0] && (pack[0].paymentStatus || '').toLowerCase() === 'paid';
+                                                                        return firstPaid ? 'bg-green-100 text-green-700' : 'bg-teal-100 text-teal-700';
+                                                                    }
+                                                                    if (booking.paymentStatus === 'Due' || booking.paymentStatus === 'Due (Exception)') return 'bg-amber-100 text-amber-700';
+                                                                    return 'bg-red-50 text-red-600';
+                                                                })()}`}>
+                                                                    {booking.status === 'pending_approval' ? 'Pending Approval' : booking.type === 'consultation' ? 'Free Consultation' : (() => {
+                                                                        const ps = booking.paymentStatus || '';
+                                                                        if (booking.recurringId) {
+                                                                            const allB = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+                                                                            const pack = allB.filter(b => b.recurringId === booking.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+                                                                            if (pack.length === 10 && pack[0]) {
+                                                                                const firstPaid = (pack[0].paymentStatus || '').toLowerCase() === 'paid';
+                                                                                if (ps === 'Due' || ps.toLowerCase() === 'due') return 'Awaiting initial payment';
+                                                                                if (ps === 'In bundle') return firstPaid ? 'Paid in bulk' : 'Awaiting initial payment';
+                                                                                return 'Awaiting initial payment';
+                                                                            }
+                                                                        }
+                                                                        if (ps === 'Due' || ps.toLowerCase() === 'due') return 'Due';
+                                                                        if (ps === 'In bundle') return 'Awaiting initial payment';
+                                                                        if (ps === 'Due (Exception)') return 'Payment due';
+                                                                        if (ps === 'Paid' || ps.toLowerCase() === 'paid') return 'Paid';
+                                                                        return ps || 'Upcoming';
+                                                                    })()}
                                                                 </span>
+                                                                {booking.recurringId && (() => {
+                                                                    const allBookings = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+                                                                    const packBookings = allBookings.filter(b => b.recurringId === booking.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+                                                                    if (packBookings.length !== 10) return null;
+                                                                    const index = packBookings.findIndex(b => b.id === booking.id);
+                                                                    const lessonNum = index >= 0 ? index + 1 : null;
+                                                                    return lessonNum ? <span className="text-[10px] text-teal-600 font-bold">Lesson {lessonNum}/10</span> : null;
+                                                                })()}
                                                             </div>
                                                         </div>
                                                     </div>
 
-                                                    <div className="flex-1 w-full">
-                                                        <div className="text-[10px] font-black text-gray-300 uppercase tracking-widest mb-2 ml-1">Lesson Focus</div>
-                                                        <div onClick={() => setEditNoteTarget({ booking, currentNote: booking.subject || '' })} className="bg-gray-50/50 p-4 rounded-xl border border-gray-100 flex items-start justify-between group cursor-pointer hover:border-teal-200 transition-all shadow-inner bg-white min-h-[80px]">
-                                                            <p className={`text-sm leading-relaxed font-bold tracking-tight ${booking.subject ? 'text-gray-700' : 'text-gray-300 italic'}`}>
-                                                                {booking.subject || "Add notes for your tutor..."}
-                                                            </p>
-                                                            <div className="text-teal-500 bg-teal-50 p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all shadow-sm"><FileText size={18} /></div>
+                                                    <div className="flex-1 w-full space-y-3">
+                                                        <div>
+                                                            <div className="text-[10px] font-black text-teal-600 uppercase tracking-widest mb-1 ml-1">Lesson type</div>
+                                                            <div onClick={() => setEditNoteTarget({ booking, currentSubject: booking.subject || studentProfileSubject || '', currentLessonNotes: booking.lessonNotes || '' })} className="bg-white px-4 py-3 rounded-xl border-2 border-dashed border-teal-200 flex items-center justify-between group cursor-pointer hover:border-teal-400 hover:bg-teal-50/30 transition-all min-h-[56px]">
+                                                                <p className={`text-sm font-bold tracking-tight ${(booking.subject || studentProfileSubject) ? 'text-purple-600' : 'text-teal-500 italic'}`}>
+                                                                    {booking.subject || studentProfileSubject || 'Not selected'}
+                                                                </p>
+                                                                <div className="text-teal-500 bg-teal-50 p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all shadow-sm"><FileText size={16} /></div>
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">Lesson notes (for teacher)</div>
+                                                            <div onClick={() => setEditNoteTarget({ booking, currentSubject: booking.subject || studentProfileSubject || '', currentLessonNotes: booking.lessonNotes || '' })} className="bg-white px-4 py-3 rounded-xl border border-dashed border-gray-200 flex items-center justify-between group cursor-pointer hover:border-teal-300 hover:bg-gray-50/50 transition-all min-h-[56px]">
+                                                                <p className={`text-sm font-medium tracking-tight ${booking.lessonNotes ? 'text-gray-700' : 'text-gray-400 italic'}`}>
+                                                                    {booking.lessonNotes || "Click to add request or notes for your teacher"}
+                                                                </p>
+                                                                <div className="text-gray-400 bg-gray-100 p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all"><FileText size={14} /></div>
+                                                            </div>
                                                         </div>
                                                     </div>
 
@@ -613,9 +697,18 @@ const StudentDashboard = () => {
                                                                     >
                                                                         <Calendar size={18} />
                                                                     </button>
-                                                                    <button onClick={() => handleJoinLesson(booking)} className="flex-1 bg-purple-600 hover:bg-purple-700 text-white px-5 py-3 rounded-xl font-black text-xs transition-all shadow-lg flex items-center justify-center gap-2 uppercase tracking-widest">
+                                                                    {(() => {
+                                                                        const allB = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+                                                                        const pack = allB.filter(b => b.recurringId === booking.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+                                                                        const firstInPackPaid = pack.length === 10 && pack[0] && (pack[0].paymentStatus || '').toLowerCase() === 'paid';
+                                                                        const isIn10Pack = pack.length === 10;
+                                                                        const canStart = booking.type === 'consultation' || booking.paymentStatus === 'Due (Exception)' || (isIn10Pack ? firstInPackPaid : ((booking.paymentStatus || '').toLowerCase() === 'paid' || booking.paymentStatus === 'Due'));
+                                                                        return (
+                                                                    <button onClick={() => canStart && handleJoinLesson(booking)} disabled={!canStart} title={!canStart ? 'Pay for the first lesson in the pack first' : 'Start lesson'} className={`flex-1 px-5 py-3 rounded-xl font-black text-xs transition-all shadow-lg flex items-center justify-center gap-2 uppercase tracking-widest ${canStart ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
                                                                         <Video size={16} /> Start Lesson
                                                                     </button>
+                                                                        );
+                                                                    })()}
                                                                 </>
                                                             )}
                                                         </div>
@@ -700,7 +793,7 @@ const StudentDashboard = () => {
                                     </div>
                                 ) : (
                                     <div className="space-y-6 relative before:absolute before:left-[35px] before:top-4 before:bottom-4 before:w-0.5 before:bg-gray-100">
-                                        {history.map((session, idx) => (
+                                        {[...history].sort((a, b) => new Date(a.date + 'T' + (a.time || '00:00')) - new Date(b.date + 'T' + (b.time || '00:00'))).map((session, idx) => (
                                             <div key={idx} className="relative pl-16">
                                                 <div className="absolute left-[28px] top-6 w-4 h-4 bg-white border-2 border-purple-500 rounded-full z-10 shadow-sm" />
                                                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:border-purple-200 transition-all overflow-hidden relative">
@@ -744,6 +837,17 @@ const StudentDashboard = () => {
                                                             <p className="text-gray-700 font-semibold text-xs leading-relaxed">{session.next_steps || session.nextSteps || "Continue regular practice."}</p>
                                                         </div>
                                                     </div>
+                                                    {session.lessonPdfBase64 && (
+                                                        <div className="mt-4 pt-4 border-t border-gray-100">
+                                                            <a
+                                                                href={`data:application/pdf;base64,${session.lessonPdfBase64}`}
+                                                                download={`lesson-notes-${new Date(session.date).toISOString().split('T')[0]}.pdf`}
+                                                                className="inline-flex items-center gap-2 text-teal-600 hover:text-teal-700 font-bold text-sm"
+                                                            >
+                                                                <FileText size={16} /> Download lesson notes (PDF)
+                                                            </a>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                         ))}
@@ -752,13 +856,53 @@ const StudentDashboard = () => {
                             </div>
                         )}
 
-                        {activeTab === 'invoices' && (
+                        {activeTab === 'invoices' && (() => {
+                            const allItems = [...bookings, ...history].sort((a, b) => new Date(a.date) - new Date(b.date));
+                            const now = new Date();
+                            const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                            const dataMonths = [...new Set(allItems.map(item => {
+                                const d = new Date(item.date);
+                                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                            }))];
+                            const sixMonthKeys = Array.from({ length: 6 }, (_, i) => { const d = new Date(now.getFullYear(), now.getMonth() + i, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
+                            const months = [...new Set([...sixMonthKeys, ...dataMonths])].sort();
+                            const [year, month] = (invoiceMonth || currentMonthKey).split('-').map(Number);
+                            const filtered = allItems.filter(item => {
+                                const d = new Date(item.date);
+                                return d.getFullYear() === year && d.getMonth() + 1 === month;
+                            });
+                            const isPaid = (item) => (item.paymentStatus || '').toLowerCase() === 'paid';
+                                                            const getStatusLabel = (item) => {
+                                                                if (item.type === 'consultation') return 'Paid';
+                                                                if (isPaid(item)) return 'Paid';
+                                                                if (item.paymentStatus === 'In bundle') {
+                                                                    const allB = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+                                                                    const pack = allB.filter(b => b.recurringId === item.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+                                                                    const firstPaid = pack.length === 10 && pack[0] && (pack[0].paymentStatus || '').toLowerCase() === 'paid';
+                                                                    return firstPaid ? 'Paid in bulk' : 'Awaiting initial payment';
+                                                                }
+                                                                const allB = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+                                                                const pack = item.recurringId ? allB.filter(b => b.recurringId === item.recurringId && b.status !== 'cancelled') : [];
+                                                                if (pack.length === 10) return item.paymentStatus === 'Due' ? 'Awaiting initial payment' : (item.paymentStatus || 'Due');
+                                                                return item.paymentStatus || 'Due';
+                                                            };
+                            return (
                             <div className="space-y-6">
                                 <h2 className="text-xl font-black text-gray-900 tracking-tight flex items-center gap-3"><CreditCard className="text-teal-600" size={24} /> Invoices & Billing</h2>
+                                <div className="flex flex-wrap items-center gap-3">
+                                    <span className="text-xs font-black text-gray-500 uppercase tracking-widest">Month</span>
+                                    <select value={invoiceMonth} onChange={(e) => setInvoiceMonth(e.target.value)} className="rounded-xl border-2 border-gray-100 px-4 py-2 font-bold text-sm text-gray-800 bg-white focus:border-teal-500">
+                                        {months.length === 0 ? <option value="">No sessions</option> : months.map(m => {
+                                            const [y, mo] = m.split('-').map(Number);
+                                            const label = new Date(y, mo - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+                                            return <option key={m} value={m}>{label}</option>;
+                                        })}
+                                    </select>
+                                </div>
                                 <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                                    <div className="overflow-x-auto">
+                                    <div className="overflow-x-auto overflow-y-auto max-h-[60vh]">
                                         <table className="w-full text-left">
-                                            <thead className="bg-gray-50/50 border-b border-gray-100">
+                                            <thead className="bg-gray-50/50 border-b border-gray-100 sticky top-0 z-10">
                                                 <tr>
                                                     <th className="p-4 font-black text-gray-400 text-[9px] uppercase tracking-widest">Date</th>
                                                     <th className="p-4 font-black text-gray-400 text-[9px] uppercase tracking-widest">Description</th>
@@ -768,27 +912,36 @@ const StudentDashboard = () => {
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-gray-50">
-                                                {[...bookings, ...history].sort((a, b) => new Date(a.date) - new Date(b.date)).map((item, idx) => (
-                                                    <tr key={idx} className="hover:bg-gray-50/50 transition-colors">
+                                                {filtered.map((item, idx) => {
+                                                    const isConsultation = item.type === 'consultation';
+                                                    const singleRate = (subject) => { const s = (subject || '').toLowerCase(); if (s.includes('ks3')) return 25; if (s.includes('a-level') || s.includes('alevel')) return 40; return 30; };
+                                                    const displayCost = isConsultation ? 0 : (item.cost != null ? item.cost : singleRate(item.subject));
+                                                    const displayDesc = isConsultation ? 'Free Consultation' : (item.subject || item.topic || 'Tutoring Session');
+                                                    const displayStatus = getStatusLabel(item);
+                                                    return (
+                                                    <tr key={item.id || idx} className="hover:bg-gray-50/50 transition-colors">
                                                         <td className="p-4"><div className="font-bold text-gray-900 text-xs">{new Date(item.date).toLocaleDateString('en-GB')}</div></td>
-                                                        <td className="p-4"><div className="font-bold text-gray-600 text-xs">{item.subject || item.topic || "Tutoring Session"}</div></td>
-                                                        <td className="p-4 font-black text-gray-900 text-sm">£{item.cost || 30}</td>
-                                                        <td className="p-4"><span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border ${item.paymentStatus === 'Paid' ? 'bg-green-100 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-100'}`}>{item.paymentStatus || 'Due'}</span></td>
+                                                        <td className="p-4"><div className="font-bold text-gray-600 text-xs">{displayDesc}</div></td>
+                                                        <td className="p-4 font-black text-gray-900 text-sm">£{displayCost}</td>
+                                                        <td className="p-4"><span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border ${displayStatus === 'Paid' || displayStatus === 'Paid in bulk' ? 'bg-green-100 text-green-700 border-green-200' : displayStatus === 'Awaiting initial payment' ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-red-50 text-red-700 border-red-100'}`}>{displayStatus}</span></td>
                                                         <td className="p-4 text-right">
-                                                            {item.paymentStatus !== 'Paid' ? (
+                                                            {!isPaid(item) ? (
                                                                 <button onClick={() => handlePay(item)} className="text-[10px] font-black text-teal-600 underline uppercase tracking-widest">Pay via Stripe</button>
                                                             ) : (
                                                                 <button onClick={() => setReceiptTarget(item)} className="text-[10px] font-black text-gray-400 underline uppercase tracking-widest">Receipt</button>
                                                             )}
                                                         </td>
                                                     </tr>
-                                                ))}
+                                                    );
+                                                })}
                                             </tbody>
                                         </table>
                                     </div>
+                                    {filtered.length === 0 && <div className="p-8 text-center text-gray-400 font-bold text-sm">No sessions this month.</div>}
                                 </div>
                             </div>
-                        )}
+                            );
+                        })()}
 
                         {activeTab === 'messages' && (
                             <div className="space-y-6">
@@ -851,7 +1004,7 @@ const StudentDashboard = () => {
                         <div className="bg-teal-600 p-6 text-white relative">
                             <h3 className="text-xl font-black mb-1">{rescheduleTarget ? 'Confirm Reschedule' : 'Secure Your Lesson'}</h3>
                             <p className="text-teal-100 font-bold opacity-80 uppercase tracking-widest text-[10px]">{new Date(selectedSlot.date).toLocaleDateString('en-GB', { weekday: 'long', month: 'long', day: 'numeric' })} at {selectedSlot.time}</p>
-                            {!rescheduleTarget && <div className="absolute top-6 right-6 font-black text-2xl">£{hourlyRate}</div>}
+                            {!rescheduleTarget && <div className="absolute top-6 right-6 font-black text-2xl">£{getStudentLevel(bookingSubject) === 'KS3' ? 25 : getStudentLevel(bookingSubject) === 'A-Level' ? 40 : 30}</div>}
                         </div>
                         <div className="p-6 space-y-4">
                             {rescheduleTarget && (
@@ -861,8 +1014,12 @@ const StudentDashboard = () => {
                                 </div>
                             )}
                             <div>
-                                <label className="block text-gray-400 font-black uppercase tracking-widest text-[9px] mb-2 ml-1">What would you like to cover?</label>
-                                <textarea value={bookingSubject} onChange={(e) => setBookingSubject(e.target.value)} placeholder="E.g. Quadratic Equations..." className="w-full border border-gray-200 rounded-xl p-4 focus:border-teal-500 transition-all font-bold text-sm min-h-[100px] bg-gray-50" />
+                                <label className="block text-teal-600 font-black uppercase tracking-widest text-[9px] mb-2 ml-1">Lesson type</label>
+                                <input type="text" value={bookingSubject} onChange={(e) => setBookingSubject(e.target.value)} placeholder="e.g. KS3 Maths, GCSE Sociology" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 focus:border-teal-500 transition-all font-bold text-sm bg-gray-50" />
+                            </div>
+                            <div>
+                                <label className="block text-gray-400 font-black uppercase tracking-widest text-[9px] mb-2 ml-1">Lesson notes (optional — for your teacher)</label>
+                                <textarea value={bookingNotes} onChange={(e) => setBookingNotes(e.target.value)} placeholder="e.g. Quadratic equations, essay structure, topics you want to cover..." className="w-full border border-gray-200 rounded-xl p-4 focus:border-teal-500 transition-all font-medium text-sm min-h-[80px] bg-gray-50" />
                             </div>
                             {!rescheduleTarget && (
                                 <div className="space-y-3">
@@ -912,6 +1069,14 @@ const StudentDashboard = () => {
                                                     ? 'Pay for all 10 sessions now and save! Subsequent sessions will be marked as Paid.'
                                                     : 'Secure this slot for the next 9 weeks. You only pay for each lesson as it comes.'}
                                             </p>
+                                            {recurringType === 'pack' && (
+                                                <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-left">
+                                                    <p className="text-[10px] font-black text-amber-800 uppercase tracking-widest mb-1">Refund & Administrative Fee Policy</p>
+                                                    <p className="text-[10px] text-amber-900 font-medium leading-relaxed">
+                                                        A non-refundable administrative fee of £15.00 applies to all bundle purchases to cover secure payment processing and account setup. In the event of a requested refund for unused sessions, the refund will be calculated based on the remaining balance minus this administrative fee. Please note that used sessions are non-refundable.
+                                                    </p>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -928,11 +1093,18 @@ const StudentDashboard = () => {
             {editNoteTarget && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
                     <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-lg w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
-                        <h3 className="text-xl font-black tracking-tight mb-4 text-gray-900">Lesson Notes</h3>
-                        <textarea value={editNoteTarget.currentNote} onChange={e => setEditNoteTarget({ ...editNoteTarget, currentNote: e.target.value })} className="w-full border-2 border-gray-50 rounded-2xl p-6 min-h-[160px] font-bold text-lg text-gray-800 bg-gray-50 mb-6" placeholder="Type your notes here..." />
+                        <h3 className="text-xl font-black tracking-tight mb-4 text-gray-900">Lesson type & notes</h3>
+                        <div className="mb-4">
+                            <label className="block text-[10px] font-black text-teal-600 uppercase tracking-widest mb-2">Lesson type</label>
+                            <input type="text" value={editNoteTarget.currentSubject || ''} onChange={e => setEditNoteTarget({ ...editNoteTarget, currentSubject: e.target.value })} className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 font-bold text-gray-800 bg-gray-50 focus:border-teal-500 transition-all" placeholder="e.g. KS3 Maths, GCSE Sociology" />
+                        </div>
+                        <div className="mb-6">
+                            <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Lesson notes (for your teacher)</label>
+                            <textarea value={editNoteTarget.currentLessonNotes || ''} onChange={e => setEditNoteTarget({ ...editNoteTarget, currentLessonNotes: e.target.value })} className="w-full border-2 border-gray-100 rounded-xl p-4 min-h-[120px] font-medium text-gray-800 bg-gray-50 focus:border-teal-500 transition-all" placeholder="e.g. Quadratic equations, essay structure, topics you want to cover..." />
+                        </div>
                         <div className="flex gap-4">
                             <button onClick={() => setEditNoteTarget(null)} className="flex-1 py-4 text-gray-400 font-black uppercase tracking-widest text-xs">Discard</button>
-                            <button onClick={handleSaveNote} className="flex-[2] py-4 bg-teal-600 text-white rounded-2xl font-black shadow-lg uppercase tracking-widest text-xs">Save Notes</button>
+                            <button onClick={handleSaveNote} className="flex-[2] py-4 bg-teal-600 text-white rounded-2xl font-black shadow-lg uppercase tracking-widest text-xs">Save</button>
                         </div>
                     </div>
                 </div>
@@ -970,23 +1142,23 @@ const StudentDashboard = () => {
                     <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full overflow-y-auto max-h-[90vh] text-center p-8">
                         <h3 className="text-2xl font-black mb-6">Make Payment</h3>
                         <div className="bg-gray-50 p-6 rounded-2xl mb-6">
-                            <div className="text-3xl font-black text-gray-900">£{paymentTarget.cost || 30}.00</div>
+                            <div className="text-3xl font-black text-gray-900">£{paymentTarget.type === 'consultation' ? 0 : (paymentTarget.cost ?? (getStudentLevel(bookingSubject) === 'KS3' ? 25 : getStudentLevel(bookingSubject) === 'A-Level' ? 40 : 30))}.00</div>
                         </div>
                         <a
                             href={(() => {
                                 const subject = (paymentTarget.subject || '').toLowerCase();
                                 const isALevel = subject.includes('a-level') || subject.includes('alevel') || subject.includes('a level') || subject.includes('a-lvl');
                                 const isGCSE = subject.includes('gcse');
-                                const isPack = paymentTarget.cost >= 280;
+                                const isPack = paymentTarget.type !== 'consultation' && (paymentTarget.type === 'pack' || paymentTarget.cost >= 230);
 
                                 if (isPack) {
                                     if (isALevel) return "https://buy.stripe.com/bJe9ATbUXed93oG4XNeIw03";
                                     if (isGCSE) return "https://buy.stripe.com/9AQ3cv9MT7OP5mE3cl";
-                                    return "https://buy.stripe.com/eVqbJ1bUX1qnbVcdujeIw01"; // KS3 Pack
+                                    return "https://buy.stripe.com/28EbJ17EHed97EW9e3eIw04"; // KS3 bulk £230
                                 } else {
                                     if (isALevel) return "https://buy.stripe.com/9B6fZhgbdd956ASdujeIw02";
                                     if (isGCSE) return "https://buy.stripe.com/14AdR9fjjclh8yQfZ1";
-                                    return "https://buy.stripe.com/14A3cv5wzglh1gyai7eIw00"; // KS3 Single
+                                    return "https://buy.stripe.com/eVq4gz3or5GDbVccqfeIw05"; // KS3 single £25
                                 }
                             })()}
                             target="_blank"
@@ -1008,7 +1180,7 @@ const StudentDashboard = () => {
                         <div className="space-y-3 border-t border-b border-dashed border-gray-200 py-4 mb-6 text-center">
                             <div className="flex justify-between font-bold text-sm"><span className="text-gray-400 uppercase text-[9px]">Date</span><span>{new Date(receiptTarget.date).toLocaleDateString('en-GB')}</span></div>
                             <div className="flex justify-between font-bold text-sm"><span className="text-gray-400 uppercase text-[9px]">Lesson</span><span>{receiptTarget.subject || "Session"}</span></div>
-                            <div className="flex justify-between font-black text-lg"><span className="text-gray-400 uppercase text-[9px] font-bold">Amount</span><span className="text-teal-600">£{receiptTarget.cost || 30}.00</span></div>
+                            <div className="flex justify-between font-black text-lg"><span className="text-gray-400 uppercase text-[9px] font-bold">Amount</span><span className="text-teal-600">£{receiptTarget.type === 'consultation' ? 0 : (receiptTarget.cost ?? 30)}.00</span></div>
                         </div>
                         <button onClick={() => setReceiptTarget(null)} className="w-full py-4 bg-gray-900 text-white rounded-2xl font-black uppercase tracking-widest text-xs">Close</button>
                     </div>
@@ -1020,11 +1192,17 @@ const StudentDashboard = () => {
                     <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-8 text-center max-h-[90vh] overflow-y-auto">
                         <Trash2 className="mx-auto text-red-500 mb-4" size={40} />
                         <h3 className="text-xl font-black mb-2">Cancel Lesson?</h3>
-                        <p className="text-gray-500 mb-6 font-bold text-sm">
+                        <p className="text-gray-500 mb-2 font-bold text-sm">
                             {cancelTarget.recurringId
                                 ? "This session is part of a recurring series. Would you like to cancel just this one, or the entire series?"
                                 : `Are you sure you want to cancel your session on ${new Date(cancelTarget.date).toLocaleDateString('en-GB')} at ${cancelTarget.time}?`}
                         </p>
+                        {cancelTarget.recurringId && (() => {
+                            const allB = JSON.parse(localStorage.getItem('tutor_bookings') || '[]');
+                            const pack = allB.filter(b => b.recurringId === cancelTarget.recurringId && b.status !== 'cancelled').sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+                            const isPaidPack = pack.length === 10 && pack[0] && (pack[0].paymentStatus || '').toLowerCase() === 'paid';
+                            return isPaidPack ? <p className="text-amber-700 text-sm font-medium mb-4 bg-amber-50 rounded-xl p-3">Part of a paid pack – no refund for individual lessons. Consider rescheduling instead.</p> : null;
+                        })()}
                         <div className="flex flex-col gap-3">
                             {cancelTarget.recurringId ? (
                                 <>
@@ -1034,6 +1212,7 @@ const StudentDashboard = () => {
                             ) : (
                                 <button onClick={() => handleConfirmCancellation()} className="w-full py-3 bg-red-600 text-white rounded-xl font-black shadow-lg uppercase tracking-widest text-xs">Cancel Session</button>
                             )}
+                            <button onClick={() => { setCancelTarget(null); initiateReschedule(cancelTarget); }} className="w-full py-3 bg-blue-50 text-blue-600 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-blue-100">Reschedule instead</button>
                             <button onClick={() => setCancelTarget(null)} className="w-full py-3 text-gray-400 font-black uppercase tracking-widest text-xs">Keep Session</button>
                         </div>
                     </div>
